@@ -12,6 +12,7 @@
  ********************************************************************************/
 
 #include "behaviors.hpp"
+#include "planning/obstacle_avoidance.hpp"
 #include <adore_dynamics_conversions.hpp>
 #include <adore_math/distance.h>
 #include <dynamics/comfort_settings.hpp>
@@ -74,7 +75,25 @@ namespace behavior
         }
 
 
-        dynamics::Trajectory trajectory = planner.plan_route_trajectory( route_with_signal, vehicle_state_dynamic, traffic_participants );
+        {
+    const auto oa_result = ::adore::planner::try_plan_obstacle_avoidance(
+      planner,
+      route_with_signal,
+      vehicle_state_dynamic,
+      traffic_participants );
+
+    if( oa_result.success )
+    {
+      auto trajectory = oa_result.trajectory;
+      trajectory.adjust_start_time( vehicle_state_dynamic.time );
+
+      Behavior trajectory_and_signal;
+      trajectory_and_signal.trajectory = dynamics::conversions::to_ros_msg( trajectory );
+      return trajectory_and_signal;
+    }
+  }
+
+  dynamics::Trajectory trajectory = planner.plan_route_trajectory( route_with_signal, vehicle_state_dynamic, traffic_participants );
         trajectory.adjust_start_time( vehicle_state_dynamic.time );
         trajectory.label              = "driving mission";
 
