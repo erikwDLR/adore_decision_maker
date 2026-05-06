@@ -1,0 +1,33 @@
+/**:
+  ros__parameters:
+    obstacle_avoidance.max_static_object_speed: 0.5
+
+    obstacle_avoidance.max_object_ahead: 60.0
+    obstacle_avoidance.min_obstacle_route_overlap: 0.0
+    obstacle_avoidance.max_projection_distance_from_route: 8.0
+
+    obstacle_avoidance.ego_corridor_safety_margin: 0.20
+    obstacle_avoidance.side_clearance: 0.2
+    obstacle_avoidance.front_clearance: 4.0
+    obstacle_avoidance.rear_clearance: 4.0
+
+    obstacle_avoidance.min_lateral_shift: 0.50
+    obstacle_avoidance.max_lateral_shift: 3.20
+    obstacle_avoidance.in_lane_shift_limit: 0.70
+
+    obstacle_avoidance.entry_extra_distance: 12.0
+    obstacle_avoidance.return_extra_distance: 15.0
+
+    obstacle_avoidance.max_speed_during_avoidance: 2.0
+
+    obstacle_avoidance.stop_distance_before_obstacle: 5.0
+    obstacle_avoidance.stop_time_step: 0.1
+
+    obstacle_avoidance.oncoming_lookahead_after_obj: 35.0
+    obstacle_avoidance.min_oncoming_heading_diff: 2.35
+
+    obstacle_avoidance.prefer_left_shift: true
+    obstacle_avoidance.overtaking_allowed: true
+
+    obstacle_avoidance.finish_buffer: 0.0
+    obstacle_avoidance.finish_tolerance: 0.75

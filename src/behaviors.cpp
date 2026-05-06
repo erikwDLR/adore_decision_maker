@@ -12,6 +12,7 @@
  ********************************************************************************/
 
 #include "behaviors.hpp"
+#include "adore_map_conversions.hpp"
 #include "planning/obstacle_avoidance.hpp"
 #include <adore_dynamics_conversions.hpp>
 #include <adore_math/distance.h>
@@ -28,7 +29,8 @@ namespace behavior
                                 const map::Route& route,
                                 const dynamics::TrafficParticipantSet& traffic_participants,
                                 const std::map<size_t, adore_ros2_msgs::msg::TrafficSignal>& traffic_signals,
-                                const std::optional<adore_ros2_msgs::msg::Weather>& weather
+                                const std::optional<adore_ros2_msgs::msg::Weather>& weather,
+                                const planner::ObstacleAvoidanceParams& params_for_obstacle_avoidance
                            )
     {
         // Go through route, and update speed at points based on traffic signal positions
@@ -43,6 +45,13 @@ namespace behavior
 
         if ( weather.has_value() )
         {
+            // //Debug
+            //     RCLCPP_INFO(
+            //         rclcpp::get_logger( "Behaviors" ),
+            //         "Current weather: wind_intensity=%.2f, wetness=%.2f",
+            //         weather.value().wind_intensity,
+            //         weather.value().wetness );
+
             if ( weather.value().wind_intensity > 2 )
             {
                 dynamics::ComfortSettings custom_comfort_settings;
@@ -75,27 +84,38 @@ namespace behavior
         }
 
 
+    
+            
+        const auto oa_result = ::adore::planner::try_plan_obstacle_avoidance(
+        planner,
+        route_with_signal,
+        vehicle_state_dynamic,
+        traffic_participants,
+        params_for_obstacle_avoidance );
+
+        //Debug oa_result
+        RCLCPP_INFO(
+            rclcpp::get_logger( "Behaviors" ),
+            "Obstacle avoidance result: success=%s, mode=%d, reason=%s",
+            oa_result.success ? "true" : "false",
+            static_cast<int>( oa_result.mode ),
+            oa_result.reason.c_str() );
+
+        if( oa_result.success )
         {
-    const auto oa_result = ::adore::planner::try_plan_obstacle_avoidance(
-      planner,
-      route_with_signal,
-      vehicle_state_dynamic,
-      traffic_participants );
-
-    if( oa_result.success )
-    {
-      auto trajectory = oa_result.trajectory;
-      trajectory.adjust_start_time( vehicle_state_dynamic.time );
-
-      Behavior trajectory_and_signal;
-      trajectory_and_signal.trajectory = dynamics::conversions::to_ros_msg( trajectory );
-      return trajectory_and_signal;
-    }
-  }
-
-  dynamics::Trajectory trajectory = planner.plan_route_trajectory( route_with_signal, vehicle_state_dynamic, traffic_participants );
+        auto trajectory = oa_result.trajectory;
         trajectory.adjust_start_time( vehicle_state_dynamic.time );
-        trajectory.label              = "driving mission";
+
+        Behavior trajectory_and_signal;
+        trajectory_and_signal.trajectory = dynamics::conversions::to_ros_msg( trajectory );
+        trajectory_and_signal.modified_route = map::conversions::to_ros_msg( oa_result.modified_route );
+        return trajectory_and_signal;
+        }
+    
+
+    dynamics::Trajectory trajectory = planner.plan_route_trajectory( route_with_signal, vehicle_state_dynamic, traffic_participants );
+            trajectory.adjust_start_time( vehicle_state_dynamic.time );
+            trajectory.label              = "driving mission";
 
         Behavior trajectory_and_signal;
         trajectory_and_signal.trajectory = dynamics::conversions::to_ros_msg( trajectory );

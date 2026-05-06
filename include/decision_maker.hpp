@@ -21,11 +21,13 @@
 #include "planning/trajectory_planner.hpp"
 #include "adore_ros2_msgs/msg/caution_zone.hpp"
 #include "adore_ros2_msgs/msg/odd.hpp"
+#include "adore_ros2_msgs/msg/route.hpp"
 #include "adore_ros2_msgs/msg/traffic_participant.hpp"
 #include "adore_ros2_msgs/msg/traffic_participant_set.hpp"
 #include "adore_ros2_msgs/msg/weather.hpp"
 #include <adore_math/polygon.h>
 #include "std_msgs/msg/bool.hpp"
+#include "planning/obstacle_avoidance.hpp"
 
 namespace adore
 {
@@ -66,6 +68,7 @@ private:
 
   rclcpp::Publisher<adore_ros2_msgs::msg::Trajectory>::SharedPtr publisher_trajectory_decision;
   rclcpp::Publisher<adore_ros2_msgs::msg::Trajectory>::SharedPtr publisher_alternative_trajectory_decision;
+    rclcpp::Publisher<adore_ros2_msgs::msg::Route>::SharedPtr publisher_modified_route;
   rclcpp::Publisher<adore_ros2_msgs::msg::TrafficParticipant>::SharedPtr publisher_v2x_traffic_participant;
 
   // Planning
@@ -101,6 +104,9 @@ private:
 
   behavior::Behavior choose_and_plan_driving_behavior();
   adore_ros2_msgs::msg::TrafficParticipant make_default_participant();
+
+
+  adore::planner::ObstacleAvoidanceParams obstacle_avoidance_params;
 };
 
 } // namespace adore

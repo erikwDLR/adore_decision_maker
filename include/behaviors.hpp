@@ -18,6 +18,7 @@
 #include "adore_map/route.hpp"
 
 #include "adore_ros2_msgs/msg/trajectory.hpp"
+#include "adore_ros2_msgs/msg/route.hpp"
 #include "adore_ros2_msgs/msg/vehicle_signals.hpp"
 #include "adore_ros2_msgs/msg/traffic_signal.hpp"
 #include "adore_ros2_msgs/msg/safety_corridor.hpp"
@@ -33,6 +34,8 @@
 #include "planning/planning_helpers.hpp"
 #include "adore_ros2_msgs/msg/odd.hpp"
 
+#include "planning/obstacle_avoidance.hpp"
+
 namespace adore
 {
 namespace behavior
@@ -41,6 +44,7 @@ namespace behavior
     {
         adore_ros2_msgs::msg::Trajectory trajectory;
         std::optional<adore_ros2_msgs::msg::Trajectory> alternative_trajectory;
+    std::optional<adore_ros2_msgs::msg::Route> modified_route;
         adore_ros2_msgs::msg::VehicleSignals signals;
     };
 
@@ -52,7 +56,8 @@ namespace behavior
                                 const map::Route& route,
                                 const dynamics::TrafficParticipantSet& traffic_participants,
                                 const std::map<size_t, adore_ros2_msgs::msg::TrafficSignal>& traffic_signals,
-                                const std::optional<adore_ros2_msgs::msg::Weather>& weather
+                                const std::optional<adore_ros2_msgs::msg::Weather>& weather,
+                                const planner::ObstacleAvoidanceParams& obstacle_avoidance_params
     );
 
     Behavior driving_mission_following_managed(

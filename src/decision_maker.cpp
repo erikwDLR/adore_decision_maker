@@ -21,6 +21,127 @@
 namespace adore
 {
 
+adore::planner::ObstacleAvoidanceParams
+load_obstacle_avoidance_params( rclcpp::Node& node )
+{
+  adore::planner::ObstacleAvoidanceParams params;
+
+  params.max_static_object_speed =
+    node.declare_parameter<double>(
+      "obstacle_avoidance.max_static_object_speed",
+      params.max_static_object_speed );
+
+  params.max_object_ahead =
+    node.declare_parameter<double>(
+      "obstacle_avoidance.max_object_ahead",
+      params.max_object_ahead );
+
+  params.min_obstacle_route_overlap =
+    node.declare_parameter<double>(
+      "obstacle_avoidance.min_obstacle_route_overlap",
+      params.min_obstacle_route_overlap );
+
+  params.max_projection_distance_from_route =
+    node.declare_parameter<double>(
+      "obstacle_avoidance.max_projection_distance_from_route",
+      params.max_projection_distance_from_route );
+
+  params.ego_corridor_safety_margin =
+    node.declare_parameter<double>(
+      "obstacle_avoidance.ego_corridor_safety_margin",
+      params.ego_corridor_safety_margin );
+
+  params.side_clearance =
+    node.declare_parameter<double>(
+      "obstacle_avoidance.side_clearance",
+      params.side_clearance );
+
+  params.front_clearance =
+    node.declare_parameter<double>(
+      "obstacle_avoidance.front_clearance",
+      params.front_clearance );
+
+  params.rear_clearance =
+    node.declare_parameter<double>(
+      "obstacle_avoidance.rear_clearance",
+      params.rear_clearance );
+
+  params.min_lateral_shift =
+    node.declare_parameter<double>(
+      "obstacle_avoidance.min_lateral_shift",
+      params.min_lateral_shift );
+
+  params.max_lateral_shift =
+    node.declare_parameter<double>(
+      "obstacle_avoidance.max_lateral_shift",
+      params.max_lateral_shift );
+
+  params.in_lane_shift_limit =
+    node.declare_parameter<double>(
+      "obstacle_avoidance.in_lane_shift_limit",
+      params.in_lane_shift_limit );
+
+  params.entry_extra_distance =
+    node.declare_parameter<double>(
+      "obstacle_avoidance.entry_extra_distance",
+      params.entry_extra_distance );
+
+  params.return_extra_distance =
+    node.declare_parameter<double>(
+      "obstacle_avoidance.return_extra_distance",
+      params.return_extra_distance );
+
+  params.max_speed_during_avoidance =
+    node.declare_parameter<double>(
+      "obstacle_avoidance.max_speed_during_avoidance",
+      params.max_speed_during_avoidance );
+
+  params.stop_distance_before_obstacle =
+    node.declare_parameter<double>(
+      "obstacle_avoidance.stop_distance_before_obstacle",
+      params.stop_distance_before_obstacle );
+
+  params.stop_time_step =
+    node.declare_parameter<double>(
+      "obstacle_avoidance.stop_time_step",
+      params.stop_time_step );
+
+  params.oncoming_lookahead_after_obj =
+    node.declare_parameter<double>(
+      "obstacle_avoidance.oncoming_lookahead_after_obj",
+      params.oncoming_lookahead_after_obj );
+
+  params.min_oncoming_heading_diff =
+    node.declare_parameter<double>(
+      "obstacle_avoidance.min_oncoming_heading_diff",
+      params.min_oncoming_heading_diff );
+  
+  params.prefer_left_shift =
+    node.declare_parameter<bool>(
+      "obstacle_avoidance.prefer_left_shift",
+      params.prefer_left_shift );
+  
+  params.overtaking_allowed =
+    node.declare_parameter<bool>(
+      "obstacle_avoidance.overtaking_allowed",
+      true );
+
+  RCLCPP_INFO(
+    node.get_logger(),
+    "[OA][params] max_speed=%.3f side_clearance=%.3f front=%.3f rear=%.3f "
+    "entry_extra=%.3f return_extra=%.3f max_shift=%.3f corridor_margin=%.3f",
+    params.max_speed_during_avoidance,
+    params.side_clearance,
+    params.front_clearance,
+    params.rear_clearance,
+    params.entry_extra_distance,
+    params.return_extra_distance,
+    params.max_lateral_shift,
+    params.ego_corridor_safety_margin);
+
+  return params;
+}
+
 DecisionMaker::DecisionMaker( const rclcpp::NodeOptions& opts ) :
   rclcpp::Node{ "decision_maker", opts }
 
@@ -28,6 +149,7 @@ DecisionMaker::DecisionMaker( const rclcpp::NodeOptions& opts ) :
   load_parameters();
   setup_subscribers();
   setup_publishers();
+  obstacle_avoidance_params = load_obstacle_avoidance_params( *this );
 }
 
 void DecisionMaker::load_parameters()
@@ -144,6 +266,7 @@ void DecisionMaker::setup_publishers()
 {
   publisher_trajectory_decision = create_publisher<adore_ros2_msgs::msg::Trajectory>( "trajectory_decision", 1 );
   publisher_alternative_trajectory_decision = create_publisher<adore_ros2_msgs::msg::Trajectory>( "alternative_trajectory_decision", 1 );
+    publisher_modified_route = create_publisher<adore_ros2_msgs::msg::Route>( "modified_route", 1 );
   publisher_v2x_traffic_participant = create_publisher<adore_ros2_msgs::msg::TrafficParticipant>( "v2x_traffic_participant", 1 );
 }
 
@@ -151,6 +274,10 @@ void DecisionMaker::timer_callback()
 {
   auto behavior = choose_and_plan_driving_behavior();
   publisher_trajectory_decision->publish(behavior.trajectory);
+    if ( behavior.modified_route.has_value() )
+    {
+        publisher_modified_route->publish( behavior.modified_route.value() );
+    }
 
   if ( behavior.alternative_trajectory.has_value() )
   {
@@ -232,7 +359,8 @@ behavior::Behavior DecisionMaker::choose_and_plan_driving_behavior()
                                 latest_route.value(),
                                 traffic_participants,
                                 traffic_signals,
-                                latest_weather
+                                latest_weather,
+                                obstacle_avoidance_params
                               );
   }
 
