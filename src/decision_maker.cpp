@@ -66,20 +66,6 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
       "obstacle_avoidance.rear_clearance",
       params.rear_clearance );
 
-  params.min_lateral_shift =
-    node.declare_parameter<double>(
-      "obstacle_avoidance.min_lateral_shift",
-      params.min_lateral_shift );
-
-  params.max_lateral_shift =
-    node.declare_parameter<double>(
-      "obstacle_avoidance.max_lateral_shift",
-      params.max_lateral_shift );
-
-  params.in_lane_shift_limit =
-    node.declare_parameter<double>(
-      "obstacle_avoidance.in_lane_shift_limit",
-      params.in_lane_shift_limit );
 
   params.entry_extra_distance =
     node.declare_parameter<double>(
@@ -124,20 +110,51 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
   params.overtaking_allowed =
     node.declare_parameter<bool>(
       "obstacle_avoidance.overtaking_allowed",
-      true );
+      params.overtaking_allowed );
+
+  params.enforce_drivable_area =
+    node.declare_parameter<bool>(
+      "obstacle_avoidance.enforce_drivable_area",
+      params.enforce_drivable_area );
+
+  params.drivable_area_margin =
+    node.declare_parameter<double>(
+      "obstacle_avoidance.drivable_area_margin",
+      params.drivable_area_margin );
+
+  params.lane_boundary_join_slack =
+    node.declare_parameter<double>(
+      "obstacle_avoidance.lane_boundary_join_slack",
+      params.lane_boundary_join_slack );
+
+  params.lane_s_overlap_slack =
+    node.declare_parameter<double>(
+      "obstacle_avoidance.lane_s_overlap_slack",
+      params.lane_s_overlap_slack );
+
+  params.allow_opposite_direction_lanes =
+    node.declare_parameter<bool>(
+      "obstacle_avoidance.allow_opposite_direction_lanes",
+      params.allow_opposite_direction_lanes );
 
   RCLCPP_INFO(
     node.get_logger(),
     "[OA][params] max_speed=%.3f side_clearance=%.3f front=%.3f rear=%.3f "
-    "entry_extra=%.3f return_extra=%.3f max_shift=%.3f corridor_margin=%.3f",
+    "entry_extra=%.3f return_extra=%.3f corridor_margin=%.3f "
+    "overtaking_allowed=%s enforce_drivable_area=%s drivable_margin=%.3f boundary_slack=%.3f s_slack=%.3f opposite_lanes=%s",
     params.max_speed_during_avoidance,
     params.side_clearance,
     params.front_clearance,
     params.rear_clearance,
     params.entry_extra_distance,
     params.return_extra_distance,
-    params.max_lateral_shift,
-    params.ego_corridor_safety_margin);
+    params.ego_corridor_safety_margin,
+    params.overtaking_allowed ? "true" : "false",
+    params.enforce_drivable_area ? "true" : "false",
+    params.drivable_area_margin,
+    params.lane_boundary_join_slack,
+    params.lane_s_overlap_slack,
+    params.allow_opposite_direction_lanes ? "true" : "false" );
 
   return params;
 }

@@ -45,13 +45,6 @@ namespace behavior
 
         if ( weather.has_value() )
         {
-            // //Debug
-            //     RCLCPP_INFO(
-            //         rclcpp::get_logger( "Behaviors" ),
-            //         "Current weather: wind_intensity=%.2f, wetness=%.2f",
-            //         weather.value().wind_intensity,
-            //         weather.value().wetness );
-
             if ( weather.value().wind_intensity > 2 )
             {
                 dynamics::ComfortSettings custom_comfort_settings;
@@ -85,7 +78,7 @@ namespace behavior
 
 
     
-            
+        // Try obstacle avoidance, if it fails, just continue with the normal trajectory
         const auto oa_result = ::adore::planner::try_plan_obstacle_avoidance(
         planner,
         route_with_signal,
@@ -101,19 +94,21 @@ namespace behavior
             static_cast<int>( oa_result.mode ),
             oa_result.reason.c_str() );
 
+        // If obstacle avoidance was successful, use the resulting trajectory and modified route around the obstacle
         if( oa_result.success )
         {
-        auto trajectory = oa_result.trajectory;
-        trajectory.adjust_start_time( vehicle_state_dynamic.time );
+            auto trajectory = oa_result.trajectory;
+            trajectory.adjust_start_time( vehicle_state_dynamic.time );
 
-        Behavior trajectory_and_signal;
-        trajectory_and_signal.trajectory = dynamics::conversions::to_ros_msg( trajectory );
-        trajectory_and_signal.modified_route = map::conversions::to_ros_msg( oa_result.modified_route );
-        return trajectory_and_signal;
+            Behavior trajectory_and_signal;
+            trajectory_and_signal.trajectory = dynamics::conversions::to_ros_msg( trajectory );
+            trajectory_and_signal.modified_route = map::conversions::to_ros_msg( oa_result.modified_route );
+            return trajectory_and_signal;
         }
     
+        // If there is no obstacle avoidance, continue with the normal trajectory
 
-    dynamics::Trajectory trajectory = planner.plan_route_trajectory( route_with_signal, vehicle_state_dynamic, traffic_participants );
+        dynamics::Trajectory trajectory = planner.plan_route_trajectory( route_with_signal, vehicle_state_dynamic, traffic_participants );
             trajectory.adjust_start_time( vehicle_state_dynamic.time );
             trajectory.label              = "driving mission";
 
@@ -305,4 +300,3 @@ namespace behavior
     }
 }
 }
-
