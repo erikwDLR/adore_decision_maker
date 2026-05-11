@@ -23,6 +23,8 @@
     obstacle_avoidance.oncoming_lookahead_after_obj: 35.0
     obstacle_avoidance.min_oncoming_heading_diff: 2.35
 
+    obstacle_avoidance.obstacle_cluster_join_gap_s: 8.0
+
     obstacle_avoidance.prefer_left_shift: true
     obstacle_avoidance.overtaking_allowed: true
     obstacle_avoidance.enforce_drivable_area: true

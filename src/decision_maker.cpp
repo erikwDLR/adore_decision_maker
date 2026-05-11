@@ -137,11 +137,17 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
       "obstacle_avoidance.allow_opposite_direction_lanes",
       params.allow_opposite_direction_lanes );
 
+  params.obstacle_cluster_join_gap_s =
+  node.declare_parameter<double>(
+    "obstacle_avoidance.obstacle_cluster_join_gap_s",
+    params.obstacle_cluster_join_gap_s );
+
   RCLCPP_INFO(
     node.get_logger(),
     "[OA][params] max_speed=%.3f side_clearance=%.3f front=%.3f rear=%.3f "
     "entry_extra=%.3f return_extra=%.3f corridor_margin=%.3f "
-    "overtaking_allowed=%s enforce_drivable_area=%s drivable_margin=%.3f boundary_slack=%.3f s_slack=%.3f opposite_lanes=%s",
+    "overtaking_allowed=%s enforce_drivable_area=%s drivable_margin=%.3f boundary_slack=%.3f s_slack=%.3f opposite_lanes=%s "
+    "obstacle_cluster_join_gap_s=%.3f",
     params.max_speed_during_avoidance,
     params.side_clearance,
     params.front_clearance,
@@ -154,7 +160,8 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
     params.drivable_area_margin,
     params.lane_boundary_join_slack,
     params.lane_s_overlap_slack,
-    params.allow_opposite_direction_lanes ? "true" : "false" );
+    params.allow_opposite_direction_lanes ? "true" : "false",
+    params.obstacle_cluster_join_gap_s );
 
   return params;
 }
