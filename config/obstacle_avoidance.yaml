@@ -7,7 +7,7 @@
     obstacle_avoidance.max_projection_distance_from_route: 5.0
 
     obstacle_avoidance.ego_corridor_safety_margin: 0.20
-    obstacle_avoidance.side_clearance: 0.5
+    obstacle_avoidance.side_clearance: 0.7
     obstacle_avoidance.front_clearance: 2.0
     obstacle_avoidance.rear_clearance: 2.0
 
