@@ -13,6 +13,7 @@
 
 #pragma once
 #include <optional>
+#include <cmath>
 
 #include "dynamics/trajectory.hpp"
 #include "adore_map/route.hpp"
@@ -35,6 +36,7 @@
 #include "adore_ros2_msgs/msg/odd.hpp"
 
 #include "planning/obstacle_avoidance.hpp"
+#include "oa_maneuver_lock.hpp"
 
 namespace adore
 {
@@ -57,7 +59,8 @@ namespace behavior
                                 const dynamics::TrafficParticipantSet& traffic_participants,
                                 const std::map<size_t, adore_ros2_msgs::msg::TrafficSignal>& traffic_signals,
                                 const std::optional<adore_ros2_msgs::msg::Weather>& weather,
-                                const planner::ObstacleAvoidanceParams& obstacle_avoidance_params
+                                const planner::ObstacleAvoidanceParams& obstacle_avoidance_params,
+                                ObstacleAvoidanceLock& oa_maneuver_lock
     );
 
     Behavior driving_mission_following_managed(

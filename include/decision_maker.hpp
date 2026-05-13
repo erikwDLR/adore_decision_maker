@@ -29,6 +29,8 @@
 #include "std_msgs/msg/bool.hpp"
 #include "planning/obstacle_avoidance.hpp"
 
+#include "oa_maneuver_lock.hpp"
+
 namespace adore
 {
 
@@ -107,6 +109,7 @@ private:
 
 
   adore::planner::ObstacleAvoidanceParams obstacle_avoidance_params;
+  behavior::ObstacleAvoidanceLock oa_maneuver_lock;
 };
 
 } // namespace adore

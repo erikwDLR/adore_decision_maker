@@ -26,121 +26,33 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
 {
   adore::planner::ObstacleAvoidanceParams params;
 
-  params.max_static_object_speed =
-    node.declare_parameter<double>(
-      "obstacle_avoidance.max_static_object_speed",
-      params.max_static_object_speed );
+  params.max_static_object_speed = node.declare_parameter<double>( "obstacle_avoidance.max_static_object_speed", params.max_static_object_speed );
+  params.max_object_ahead = node.declare_parameter<double>( "obstacle_avoidance.max_object_ahead", params.max_object_ahead );
+  params.min_obstacle_route_overlap = node.declare_parameter<double>( "obstacle_avoidance.min_obstacle_route_overlap", params.min_obstacle_route_overlap );
+  params.max_projection_distance_from_route = node.declare_parameter<double>( "obstacle_avoidance.max_projection_distance_from_route", params.max_projection_distance_from_route );
+  params.ego_corridor_safety_margin = node.declare_parameter<double>( "obstacle_avoidance.ego_corridor_safety_margin", params.ego_corridor_safety_margin );
+  params.side_clearance = node.declare_parameter<double>( "obstacle_avoidance.side_clearance", params.side_clearance );
+  params.front_clearance = node.declare_parameter<double>( "obstacle_avoidance.front_clearance", params.front_clearance );
+  params.rear_clearance = node.declare_parameter<double>( "obstacle_avoidance.rear_clearance", params.rear_clearance );
 
-  params.max_object_ahead =
-    node.declare_parameter<double>(
-      "obstacle_avoidance.max_object_ahead",
-      params.max_object_ahead );
+  params.entry_extra_distance = node.declare_parameter<double>( "obstacle_avoidance.entry_extra_distance", params.entry_extra_distance );
+  params.return_extra_distance = node.declare_parameter<double>( "obstacle_avoidance.return_extra_distance", params.return_extra_distance );
+  params.max_speed_during_avoidance = node.declare_parameter<double>( "obstacle_avoidance.max_speed_during_avoidance", params.max_speed_during_avoidance );
+  params.stop_distance_before_obstacle = node.declare_parameter<double>( "obstacle_avoidance.stop_distance_before_obstacle", params.stop_distance_before_obstacle );
+  params.stop_time_step = node.declare_parameter<double>( "obstacle_avoidance.stop_time_step", params.stop_time_step );
+  params.oncoming_lookahead_after_obj = node.declare_parameter<double>( "obstacle_avoidance.oncoming_lookahead_after_obj", params.oncoming_lookahead_after_obj );
+  params.min_oncoming_heading_diff = node.declare_parameter<double>( "obstacle_avoidance.min_oncoming_heading_diff", params.min_oncoming_heading_diff );
 
-  params.min_obstacle_route_overlap =
-    node.declare_parameter<double>(
-      "obstacle_avoidance.min_obstacle_route_overlap",
-      params.min_obstacle_route_overlap );
+  params.prefer_left_shift = node.declare_parameter<bool>( "obstacle_avoidance.prefer_left_shift", params.prefer_left_shift );
+  params.overtaking_allowed = node.declare_parameter<bool>( "obstacle_avoidance.overtaking_allowed", params.overtaking_allowed );
+  params.enforce_drivable_area = node.declare_parameter<bool>( "obstacle_avoidance.enforce_drivable_area", params.enforce_drivable_area );
 
-  params.max_projection_distance_from_route =
-    node.declare_parameter<double>(
-      "obstacle_avoidance.max_projection_distance_from_route",
-      params.max_projection_distance_from_route );
+  params.drivable_area_margin = node.declare_parameter<double>( "obstacle_avoidance.drivable_area_margin", params.drivable_area_margin );
+  params.lane_boundary_join_slack = node.declare_parameter<double>( "obstacle_avoidance.lane_boundary_join_slack", params.lane_boundary_join_slack );
+  params.lane_s_overlap_slack = node.declare_parameter<double>( "obstacle_avoidance.lane_s_overlap_slack", params.lane_s_overlap_slack );
 
-  params.ego_corridor_safety_margin =
-    node.declare_parameter<double>(
-      "obstacle_avoidance.ego_corridor_safety_margin",
-      params.ego_corridor_safety_margin );
-
-  params.side_clearance =
-    node.declare_parameter<double>(
-      "obstacle_avoidance.side_clearance",
-      params.side_clearance );
-
-  params.front_clearance =
-    node.declare_parameter<double>(
-      "obstacle_avoidance.front_clearance",
-      params.front_clearance );
-
-  params.rear_clearance =
-    node.declare_parameter<double>(
-      "obstacle_avoidance.rear_clearance",
-      params.rear_clearance );
-
-
-  params.entry_extra_distance =
-    node.declare_parameter<double>(
-      "obstacle_avoidance.entry_extra_distance",
-      params.entry_extra_distance );
-
-  params.return_extra_distance =
-    node.declare_parameter<double>(
-      "obstacle_avoidance.return_extra_distance",
-      params.return_extra_distance );
-
-  params.max_speed_during_avoidance =
-    node.declare_parameter<double>(
-      "obstacle_avoidance.max_speed_during_avoidance",
-      params.max_speed_during_avoidance );
-
-  params.stop_distance_before_obstacle =
-    node.declare_parameter<double>(
-      "obstacle_avoidance.stop_distance_before_obstacle",
-      params.stop_distance_before_obstacle );
-
-  params.stop_time_step =
-    node.declare_parameter<double>(
-      "obstacle_avoidance.stop_time_step",
-      params.stop_time_step );
-
-  params.oncoming_lookahead_after_obj =
-    node.declare_parameter<double>(
-      "obstacle_avoidance.oncoming_lookahead_after_obj",
-      params.oncoming_lookahead_after_obj );
-
-  params.min_oncoming_heading_diff =
-    node.declare_parameter<double>(
-      "obstacle_avoidance.min_oncoming_heading_diff",
-      params.min_oncoming_heading_diff );
-  
-  params.prefer_left_shift =
-    node.declare_parameter<bool>(
-      "obstacle_avoidance.prefer_left_shift",
-      params.prefer_left_shift );
-  
-  params.overtaking_allowed =
-    node.declare_parameter<bool>(
-      "obstacle_avoidance.overtaking_allowed",
-      params.overtaking_allowed );
-
-  params.enforce_drivable_area =
-    node.declare_parameter<bool>(
-      "obstacle_avoidance.enforce_drivable_area",
-      params.enforce_drivable_area );
-
-  params.drivable_area_margin =
-    node.declare_parameter<double>(
-      "obstacle_avoidance.drivable_area_margin",
-      params.drivable_area_margin );
-
-  params.lane_boundary_join_slack =
-    node.declare_parameter<double>(
-      "obstacle_avoidance.lane_boundary_join_slack",
-      params.lane_boundary_join_slack );
-
-  params.lane_s_overlap_slack =
-    node.declare_parameter<double>(
-      "obstacle_avoidance.lane_s_overlap_slack",
-      params.lane_s_overlap_slack );
-
-  params.allow_opposite_direction_lanes =
-    node.declare_parameter<bool>(
-      "obstacle_avoidance.allow_opposite_direction_lanes",
-      params.allow_opposite_direction_lanes );
-
-  params.obstacle_cluster_join_gap_s =
-  node.declare_parameter<double>(
-    "obstacle_avoidance.obstacle_cluster_join_gap_s",
-    params.obstacle_cluster_join_gap_s );
+  params.allow_opposite_direction_lanes = node.declare_parameter<bool>( "obstacle_avoidance.allow_opposite_direction_lanes", params.allow_opposite_direction_lanes );
+  params.obstacle_cluster_join_gap_s = node.declare_parameter<double>( "obstacle_avoidance.obstacle_cluster_join_gap_s", params.obstacle_cluster_join_gap_s );
 
   RCLCPP_INFO(
     node.get_logger(),
@@ -161,7 +73,7 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
     params.lane_boundary_join_slack,
     params.lane_s_overlap_slack,
     params.allow_opposite_direction_lanes ? "true" : "false",
-    params.obstacle_cluster_join_gap_s );
+    params.obstacle_cluster_join_gap_s);
 
   return params;
 }
@@ -384,7 +296,8 @@ behavior::Behavior DecisionMaker::choose_and_plan_driving_behavior()
                                 traffic_participants,
                                 traffic_signals,
                                 latest_weather,
-                                obstacle_avoidance_params
+                                obstacle_avoidance_params,
+                                oa_maneuver_lock
                               );
   }
 

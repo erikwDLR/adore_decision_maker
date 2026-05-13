@@ -2,20 +2,20 @@
   ros__parameters:
     obstacle_avoidance.max_static_object_speed: 0.5
 
-    obstacle_avoidance.max_object_ahead: 65.0
-    obstacle_avoidance.min_obstacle_route_overlap: 0.0
-    obstacle_avoidance.max_projection_distance_from_route: 8.0
+    obstacle_avoidance.max_object_ahead: 45.0
+    obstacle_avoidance.min_obstacle_route_overlap: 0.5
+    obstacle_avoidance.max_projection_distance_from_route: 5.0
 
     obstacle_avoidance.ego_corridor_safety_margin: 0.20
-    obstacle_avoidance.side_clearance: 1.2
-    obstacle_avoidance.front_clearance: 4.0
-    obstacle_avoidance.rear_clearance: 4.0
+    obstacle_avoidance.side_clearance: 0.5
+    obstacle_avoidance.front_clearance: 2.0
+    obstacle_avoidance.rear_clearance: 2.0
 
 
-    obstacle_avoidance.entry_extra_distance: 12.0
-    obstacle_avoidance.return_extra_distance: 15.0
+    obstacle_avoidance.entry_extra_distance: 8.0
+    obstacle_avoidance.return_extra_distance: 14.0
 
-    obstacle_avoidance.max_speed_during_avoidance: 2.0
+    obstacle_avoidance.max_speed_during_avoidance: 2.78
 
     obstacle_avoidance.stop_distance_before_obstacle: 5.0
     obstacle_avoidance.stop_time_step: 0.1

@@ -23,100 +23,349 @@ namespace adore
 {
 namespace behavior
 {
-    Behavior driving_mission(
-                                planner::TrajectoryPlanner& planner,
-                                const dynamics::VehicleStateDynamic& vehicle_state_dynamic,  
-                                const map::Route& route,
-                                const dynamics::TrafficParticipantSet& traffic_participants,
-                                const std::map<size_t, adore_ros2_msgs::msg::TrafficSignal>& traffic_signals,
-                                const std::optional<adore_ros2_msgs::msg::Weather>& weather,
-                                const planner::ObstacleAvoidanceParams& params_for_obstacle_avoidance
-                           )
-    {
-        // Go through route, and update speed at points based on traffic signal positions
-        auto route_with_signal = route;
-        for( auto& p : route_with_signal.reference_line )
+            Behavior driving_mission(
+            planner::TrajectoryPlanner& planner,
+            const dynamics::VehicleStateDynamic& vehicle_state_dynamic,
+            const map::Route& route,
+            const dynamics::TrafficParticipantSet& traffic_participants,
+            const std::map<size_t, adore_ros2_msgs::msg::TrafficSignal>& traffic_signals,
+            const std::optional<adore_ros2_msgs::msg::Weather>& weather,
+            const planner::ObstacleAvoidanceParams& params_for_obstacle_avoidance,
+            ObstacleAvoidanceLock& oa_maneuver_lock )
         {
-            if( std::any_of( traffic_signals.begin(), traffic_signals.end(), [&]( const auto& s ) {
-                return adore::math::distance_2d( s.second, p.second ) < 3.0 && s.second.state != adore_ros2_msgs::msg::TrafficSignal::GREEN;
-                } ) )
-            p.second.max_speed = 0;
-        }
+            // Go through route, and update speed at points based on traffic signal positions.
+            auto route_with_signal = route;
 
-        if ( weather.has_value() )
-        {
-            if ( weather.value().wind_intensity > 2 )
+            for( auto& p : route_with_signal.reference_line )
             {
-                dynamics::ComfortSettings custom_comfort_settings;
-                custom_comfort_settings.max_speed = 5.5; // 20 km/h
-            
-                dynamics::Trajectory trajectory = planner.plan_route_trajectory_with_custom_comfort_settings( route_with_signal, vehicle_state_dynamic, traffic_participants, custom_comfort_settings );
+                if( std::any_of(
+                        traffic_signals.begin(),
+                        traffic_signals.end(),
+                        [&]( const auto& s )
+                        {
+                            return adore::math::distance_2d( s.second, p.second ) < 3.0 &&
+                                s.second.state != adore_ros2_msgs::msg::TrafficSignal::GREEN;
+                        } ) )
+                {
+                    p.second.max_speed = 0;
+                }
+            }
+
+            // Determine weather-based speed limitation once.
+            bool use_weather_comfort_settings = false;
+            std::string weather_label;
+
+            dynamics::ComfortSettings weather_comfort_settings;
+            weather_comfort_settings.max_speed = 5.5; // 20 km/h
+
+            if( weather.has_value() )
+            {
+                if( weather.value().wind_intensity > 2 )
+                {
+                    use_weather_comfort_settings = true;
+                    weather_label = "carefully due to wind";
+                }
+                else if( weather.value().wetness > 20 )
+                {
+                    use_weather_comfort_settings = true;
+                    weather_label = "carefully due to rain";
+                }
+            }
+
+            // -------------------------------------------------------------------------
+            // Persistent obstacle avoidance maneuver.
+            //
+            // If an OA maneuver is active, keep driving the stored modified route until
+            // the ego vehicle has passed the release point. Do NOT call
+            // try_plan_obstacle_avoidance() to decide whether an active maneuver should
+            // continue. Obstacle detection may disappear during a successful avoidance.
+            // -------------------------------------------------------------------------
+            if( oa_maneuver_lock.active )
+            {
+
+                const double ego_s_original =
+                    route_with_signal.get_s( vehicle_state_dynamic );
+
+                const double ego_s_modified_raw =
+                    get_s_on_reference_line_segments(
+                        oa_maneuver_lock.modified_route,
+                        vehicle_state_dynamic,
+                        ego_s_original,
+                        20.0 );
+
+                // Make ego_s_modified monotonic during active OA
+                double ego_s_modified = ego_s_modified_raw;
+
+                if( std::isfinite( ego_s_modified_raw ) &&
+                    std::isfinite( oa_maneuver_lock.last_modified_s ) )
+                {
+                    // Enforce monotonic progression: never go backward
+                    ego_s_modified =
+                        std::max( ego_s_modified_raw, oa_maneuver_lock.last_modified_s );
+                }
+                else if( !std::isfinite( ego_s_modified_raw ) &&
+                         std::isfinite( oa_maneuver_lock.last_modified_s ) )
+                {
+                    // Fallback: projection lost, use last valid value
+                    ego_s_modified = oa_maneuver_lock.last_modified_s;
+                    RCLCPP_WARN(
+                        rclcpp::get_logger( "Behaviors" ),
+                        "[OA][WARN] ego_s_modified projection lost; using last_modified_s=%.2f",
+                        oa_maneuver_lock.last_modified_s );
+                }
+
+                if( std::isfinite( ego_s_modified ) )
+                {
+                    oa_maneuver_lock.last_modified_s = ego_s_modified;
+                }
+
+
+                const bool projection_valid =
+                    std::isfinite( ego_s_modified ) &&
+                    std::isfinite( ego_s_original );
+
+                const double projection_error =
+                    projection_valid
+                        ? std::abs( ego_s_modified - ego_s_original )
+                        : std::numeric_limits<double>::infinity();
+
+                const bool projection_consistent =
+                    projection_error < 2.0;
+
+                const bool release_by_modified =
+                    std::isfinite( ego_s_modified ) &&
+                    ego_s_modified >= oa_maneuver_lock.release_s;
+
+                const bool release_by_original_fallback =
+                    std::isfinite( ego_s_original ) &&
+                    ego_s_original >= oa_maneuver_lock.release_s &&
+                    projection_consistent;
+
+                if( release_by_modified || release_by_original_fallback )
+                {
+                    RCLCPP_INFO(
+                        rclcpp::get_logger( "Behaviors" ),
+                        "[OA][FINISH] obstacle_id=%d ego_s_mod=%.2f ego_s_orig=%.2f release_s=%.2f by=%s returning_to_original_route",
+                        oa_maneuver_lock.obstacle_id,
+                        ego_s_modified,
+                        ego_s_original,
+                        oa_maneuver_lock.release_s,
+                        release_by_modified ? "modified" : "original_fallback" );
+
+                    if( projection_valid && projection_error > 2.0 )
+                    {
+                        RCLCPP_WARN(
+                            rclcpp::get_logger( "Behaviors" ),
+                            "[OA][WARN] modified-route projection diverged: ego_s_mod=%.2f ego_s_orig=%.2f diff=%.2f",
+                            ego_s_modified,
+                            ego_s_original,
+                            projection_error );
+                    }
+
+                    oa_maneuver_lock.reset();
+
+                    // now normal route
+                    dynamics::Trajectory trajectory =
+                        planner.plan_route_trajectory(
+                            route_with_signal,
+                            vehicle_state_dynamic,
+                            traffic_participants );
+
+                    trajectory.adjust_start_time( vehicle_state_dynamic.time );
+                    trajectory.label = "driving mission";
+
+                    Behavior trajectory_and_signal;
+                    trajectory_and_signal.trajectory =
+                        dynamics::conversions::to_ros_msg( trajectory );
+
+                    return trajectory_and_signal;
+                }
+                else
+                {
+                    dynamics::Trajectory trajectory;
+
+                    if( use_weather_comfort_settings )
+                    {
+                        trajectory =
+                            planner.plan_route_trajectory_with_custom_comfort_settings_from_s(
+                                oa_maneuver_lock.modified_route,
+                                vehicle_state_dynamic,
+                                traffic_participants,
+                                weather_comfort_settings,
+                                ego_s_modified );
+
+                        trajectory.label =
+                            "driving mission (OA locked, " + weather_label + ")";
+                    }
+                    else
+                    {
+                        trajectory =
+                            planner.plan_route_trajectory_from_s(
+                                oa_maneuver_lock.modified_route,
+                                vehicle_state_dynamic,
+                                traffic_participants,
+                                ego_s_modified );
+
+                        trajectory.label = "driving mission (OA locked)";
+                    }
+
+                    if( trajectory.states.empty() )
+                    {
+                        trajectory.states.push_back( vehicle_state_dynamic );
+                        trajectory.label = "driving mission (OA locked fallback stop)";
+                    }
+
+                    trajectory.adjust_start_time( vehicle_state_dynamic.time );
+
+                    Behavior trajectory_and_signal;
+                    trajectory_and_signal.trajectory =
+                        dynamics::conversions::to_ros_msg( trajectory );
+
+                    trajectory_and_signal.modified_route =
+                        map::conversions::to_ros_msg( oa_maneuver_lock.modified_route );
+
+                    if( std::isfinite( ego_s_modified ) )
+                    {
+                        RCLCPP_INFO(
+                            rclcpp::get_logger( "Behaviors" ),
+                            "[OA][CONTINUE] obstacle_id=%d ego_xy=(%.3f, %.3f) v=%.3f "
+                            "ego_s_mod=%.2f ego_s_orig=%.2f release_s=%.2f "
+                            "remaining_mod=%.2f remaining_orig=%.2f",
+                            oa_maneuver_lock.obstacle_id,
+                            vehicle_state_dynamic.x,
+                            vehicle_state_dynamic.y,
+                            vehicle_state_dynamic.vx,
+                            ego_s_modified,
+                            ego_s_original,
+                            oa_maneuver_lock.release_s,
+                            oa_maneuver_lock.release_s - ego_s_modified,
+                            oa_maneuver_lock.release_s - ego_s_original );
+                    }
+                    else
+                    {
+                        RCLCPP_WARN(
+                            rclcpp::get_logger( "Behaviors" ),
+                            "[OA][CONTINUE] ego_s_modified invalid while OA active; continuing modified_route" );
+                    }
+
+                    return trajectory_and_signal;
+                }
+            }
+
+            // -------------------------------------------------------------------------
+            // Weather behavior only applies directly if no OA maneuver is currently
+            // active. If OA is active, weather speed reduction is applied to the locked
+            // modified route above.
+            // -------------------------------------------------------------------------
+            if( use_weather_comfort_settings )
+            {
+                dynamics::Trajectory trajectory =
+                    planner.plan_route_trajectory_with_custom_comfort_settings(
+                        route_with_signal,
+                        vehicle_state_dynamic,
+                        traffic_participants,
+                        weather_comfort_settings );
+
                 trajectory.adjust_start_time( vehicle_state_dynamic.time );
-                trajectory.label              = "driving mission (carefully due to wind)";
+                trajectory.label = "driving mission (" + weather_label + ")";
 
                 Behavior trajectory_and_signal;
-                trajectory_and_signal.trajectory = dynamics::conversions::to_ros_msg( trajectory );
+                trajectory_and_signal.trajectory =
+                    dynamics::conversions::to_ros_msg( trajectory );
 
                 return trajectory_and_signal;
             }
 
-            if ( weather.value().wetness > 20 )
+            // -------------------------------------------------------------------------
+            // Try obstacle avoidance only if no maneuver is currently locked.
+            // -------------------------------------------------------------------------
+            const auto oa_result =
+                ::adore::planner::try_plan_obstacle_avoidance(
+                    planner,
+                    route_with_signal,
+                    vehicle_state_dynamic,
+                    traffic_participants,
+                    params_for_obstacle_avoidance );
+
+            RCLCPP_INFO(
+                rclcpp::get_logger( "Behaviors" ),
+                "Obstacle avoidance result: success=%s, mode=%d, reason=%s",
+                oa_result.success ? "true" : "false",
+                static_cast<int>( oa_result.mode ),
+                oa_result.reason.c_str() );
+
+            if( oa_result.success )
             {
-                dynamics::ComfortSettings custom_comfort_settings;
-                custom_comfort_settings.max_speed = 5.5; // 20 km/h
-            
-                dynamics::Trajectory trajectory = planner.plan_route_trajectory_with_custom_comfort_settings( route_with_signal, vehicle_state_dynamic, traffic_participants, custom_comfort_settings );
+                // Only lock real avoidance maneuvers.
+                // StopBeforeObstacle / WaitForOncoming may also return success=true,
+                // but they must not activate a persistent route lock.
+                if( oa_result.has_maneuver_bounds )
+                {
+                    oa_maneuver_lock.active = true;
+                    oa_maneuver_lock.modified_route = oa_result.modified_route;
+
+                    oa_maneuver_lock.obstacle_id = oa_result.obstacle_id;
+
+                    oa_maneuver_lock.shift_start_s = oa_result.shift_start_s;
+                    oa_maneuver_lock.shift_end_s = oa_result.shift_end_s;
+                    oa_maneuver_lock.release_s = oa_result.shift_end_s;
+
+                    oa_maneuver_lock.lateral_shift = oa_result.lateral_shift;
+                    oa_maneuver_lock.in_lane = oa_result.in_lane;
+
+                    // Reset last_modified_s when starting a new OA maneuver
+                    oa_maneuver_lock.last_modified_s = std::numeric_limits<double>::quiet_NaN();
+
+                    RCLCPP_INFO(
+                        rclcpp::get_logger( "Behaviors" ),
+                        "[OA][START] obstacle_id=%d shift_start_s=%.2f shift_end_s=%.2f release_s=%.2f shift=%.2f in_lane=%s",
+                        oa_maneuver_lock.obstacle_id,
+                        oa_maneuver_lock.shift_start_s,
+                        oa_maneuver_lock.shift_end_s,
+                        oa_maneuver_lock.release_s,
+                        oa_maneuver_lock.lateral_shift,
+                        oa_maneuver_lock.in_lane ? "true" : "false" );
+                }
+                else
+                {
+                    RCLCPP_INFO(
+                        rclcpp::get_logger( "Behaviors" ),
+                        "[OA][NO_LOCK] using OA result without maneuver bounds: mode=%d reason=%s",
+                        static_cast<int>( oa_result.mode ),
+                        oa_result.reason.c_str() );
+                }
+
+                auto trajectory = oa_result.trajectory;
                 trajectory.adjust_start_time( vehicle_state_dynamic.time );
-                trajectory.label              = "driving mission (carefully due to rain)";
 
                 Behavior trajectory_and_signal;
-                trajectory_and_signal.trajectory = dynamics::conversions::to_ros_msg( trajectory );
+                trajectory_and_signal.trajectory =
+                    dynamics::conversions::to_ros_msg( trajectory );
+
+                trajectory_and_signal.modified_route =
+                    map::conversions::to_ros_msg( oa_result.modified_route );
 
                 return trajectory_and_signal;
             }
-        }
 
+            // -------------------------------------------------------------------------
+            // Normal driving mission if no OA result is available.
+            // -------------------------------------------------------------------------
+            dynamics::Trajectory trajectory =
+                planner.plan_route_trajectory(
+                    route_with_signal,
+                    vehicle_state_dynamic,
+                    traffic_participants );
 
-    
-        // Try obstacle avoidance, if it fails, just continue with the normal trajectory
-        const auto oa_result = ::adore::planner::try_plan_obstacle_avoidance(
-        planner,
-        route_with_signal,
-        vehicle_state_dynamic,
-        traffic_participants,
-        params_for_obstacle_avoidance );
-
-        //Debug oa_result
-        RCLCPP_INFO(
-            rclcpp::get_logger( "Behaviors" ),
-            "Obstacle avoidance result: success=%s, mode=%d, reason=%s",
-            oa_result.success ? "true" : "false",
-            static_cast<int>( oa_result.mode ),
-            oa_result.reason.c_str() );
-
-        // If obstacle avoidance was successful, use the resulting trajectory and modified route around the obstacle
-        if( oa_result.success )
-        {
-            auto trajectory = oa_result.trajectory;
             trajectory.adjust_start_time( vehicle_state_dynamic.time );
+            trajectory.label = "driving mission";
 
             Behavior trajectory_and_signal;
-            trajectory_and_signal.trajectory = dynamics::conversions::to_ros_msg( trajectory );
-            trajectory_and_signal.modified_route = map::conversions::to_ros_msg( oa_result.modified_route );
+            trajectory_and_signal.trajectory =
+                dynamics::conversions::to_ros_msg( trajectory );
+
             return trajectory_and_signal;
         }
-    
-        // If there is no obstacle avoidance, continue with the normal trajectory
-
-        dynamics::Trajectory trajectory = planner.plan_route_trajectory( route_with_signal, vehicle_state_dynamic, traffic_participants );
-            trajectory.adjust_start_time( vehicle_state_dynamic.time );
-            trajectory.label              = "driving mission";
-
-        Behavior trajectory_and_signal;
-        trajectory_and_signal.trajectory = dynamics::conversions::to_ros_msg( trajectory );
-
-        return trajectory_and_signal;
-    }
 
     Behavior driving_mission_following_managed(
                             planner::TrajectoryPlanner& planner,
