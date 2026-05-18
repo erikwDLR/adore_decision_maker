@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include <adore_map/route.hpp>
+#include <planning/obstacle_avoidance.hpp>
 
 namespace adore
 {
@@ -24,6 +25,8 @@ struct ObstacleAvoidanceLock
   double lateral_shift = 0.0;
   bool in_lane = false;
 
+  adore::planner::ObstacleAvoidanceManeuver maneuver;
+
   double last_modified_s = std::numeric_limits<double>::quiet_NaN();
 
   void reset()
@@ -39,6 +42,8 @@ struct ObstacleAvoidanceLock
 
     lateral_shift = 0.0;
     in_lane = false;
+
+    maneuver = adore::planner::ObstacleAvoidanceManeuver{};
 
     last_modified_s = std::numeric_limits<double>::quiet_NaN();
   }

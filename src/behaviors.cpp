@@ -79,9 +79,113 @@ namespace behavior
             // the ego vehicle has passed the release point. Do NOT call
             // try_plan_obstacle_avoidance() to decide whether an active maneuver should
             // continue. Obstacle detection may disappear during a successful avoidance.
+            //
+            // Opposite-lane maneuvers are monitored until the commitment point.
+            // Before commitment, a new oncoming conflict aborts to a controlled
+            // stop. After commitment, the vehicle keeps the locked route rather
+            // than abruptly abandoning the return path.
             // -------------------------------------------------------------------------
             if( oa_maneuver_lock.active )
             {
+                auto make_locked_stop_behavior =
+                    [&]( const std::string& label ) -> Behavior
+                    {
+                        dynamics::Trajectory stop_trajectory;
+                        stop_trajectory.label = label;
+
+                        auto stop_state = vehicle_state_dynamic;
+                        stop_state.vx = 0.0;
+                        stop_state.time = vehicle_state_dynamic.time + 0.1;
+
+                        stop_trajectory.states.push_back( vehicle_state_dynamic );
+                        stop_trajectory.states.push_back( stop_state );
+                        stop_trajectory.adjust_start_time( vehicle_state_dynamic.time );
+
+                        Behavior trajectory_and_signal;
+                        trajectory_and_signal.trajectory =
+                            dynamics::conversions::to_ros_msg( stop_trajectory );
+                        trajectory_and_signal.modified_route =
+                            map::conversions::to_ros_msg( oa_maneuver_lock.modified_route );
+
+                        return trajectory_and_signal;
+                    };
+
+                if( oa_maneuver_lock.maneuver.active &&
+                    oa_maneuver_lock.maneuver.uses_opposite_lane )
+                {
+                    const auto monitor_result =
+                        ::adore::planner::monitor_active_obstacle_avoidance_maneuver(
+                            route_with_signal,
+                            vehicle_state_dynamic,
+                            traffic_participants,
+                            oa_maneuver_lock.maneuver,
+                            params_for_obstacle_avoidance );
+
+                    if( monitor_result.should_abort_before_commitment )
+                    {
+                        RCLCPP_WARN(
+                            rclcpp::get_logger( "Behaviors" ),
+                            "[OA][MONITOR][ABORT] obstacle_id=%d reason=%s",
+                            oa_maneuver_lock.obstacle_id,
+                            monitor_result.reason.c_str() );
+
+                        auto stop_behavior = make_locked_stop_behavior(
+                            "driving mission (OA abort before opposite-lane commitment: oncoming conflict)" );
+
+                        oa_maneuver_lock.reset();
+                        return stop_behavior;
+                    }
+
+                    if( !monitor_result.safe_to_continue )
+                    {
+                        RCLCPP_WARN(
+                            rclcpp::get_logger( "Behaviors" ),
+                            "[OA][MONITOR][COMMITTED] obstacle_id=%d reason=%s",
+                            oa_maneuver_lock.obstacle_id,
+                            monitor_result.reason.c_str() );
+                    }
+                }
+
+                // If the active OA maneuver is still an in-lane maneuver, the
+                // ego vehicle remains in its own lane. An oncoming vehicle
+                // intruding into that lane is therefore still a direct head-on
+                // threat. Use the locked modified route for the stop profile so
+                // we do not jump back to the original route.
+                if( oa_maneuver_lock.in_lane )
+                {
+                    const auto ego_lane_oncoming_result =
+                        ::adore::planner::try_plan_ego_lane_oncoming_stop(
+                            planner,
+                            oa_maneuver_lock.modified_route,
+                            vehicle_state_dynamic,
+                            traffic_participants,
+                            params_for_obstacle_avoidance );
+
+                    if( ego_lane_oncoming_result.success )
+                    {
+                        RCLCPP_INFO(
+                            rclcpp::get_logger( "Behaviors" ),
+                            "[OA][LOCKED][EGO_LANE_ONCOMING] participant_id=%d distance=%.2f ttc=%.2f v_route=%.2f stop_s=%.2f reason=%s",
+                            ego_lane_oncoming_result.participant_id,
+                            ego_lane_oncoming_result.participant_distance_s,
+                            ego_lane_oncoming_result.time_to_conflict,
+                            ego_lane_oncoming_result.participant_route_speed,
+                            ego_lane_oncoming_result.stop_s,
+                            ego_lane_oncoming_result.reason.c_str() );
+
+                        auto trajectory = ego_lane_oncoming_result.trajectory;
+                        trajectory.adjust_start_time( vehicle_state_dynamic.time );
+
+                        Behavior trajectory_and_signal;
+                        trajectory_and_signal.trajectory =
+                            dynamics::conversions::to_ros_msg( trajectory );
+
+                        trajectory_and_signal.modified_route =
+                            map::conversions::to_ros_msg( ego_lane_oncoming_result.modified_route );
+
+                        return trajectory_and_signal;
+                    }
+                }
 
                 const double ego_s_original =
                     route_with_signal.get_s( vehicle_state_dynamic );
@@ -117,6 +221,15 @@ namespace behavior
                 if( std::isfinite( ego_s_modified ) )
                 {
                     oa_maneuver_lock.last_modified_s = ego_s_modified;
+                }
+                else
+                {
+                    RCLCPP_ERROR(
+                        rclcpp::get_logger( "Behaviors" ),
+                        "[OA][ERROR] ego_s_modified invalid and no valid fallback exists while OA active; commanding controlled stop" );
+
+                    return make_locked_stop_behavior(
+                        "driving mission (OA locked controlled stop: invalid modified-route projection)" );
                 }
 
 
@@ -211,8 +324,12 @@ namespace behavior
 
                     if( trajectory.states.empty() )
                     {
-                        trajectory.states.push_back( vehicle_state_dynamic );
-                        trajectory.label = "driving mission (OA locked fallback stop)";
+                        RCLCPP_ERROR(
+                            rclcpp::get_logger( "Behaviors" ),
+                            "[OA][ERROR] planner returned empty trajectory on locked modified_route; commanding controlled stop" );
+
+                        return make_locked_stop_behavior(
+                            "driving mission (OA locked controlled stop: planning failed)" );
                     }
 
                     trajectory.adjust_start_time( vehicle_state_dynamic.time );
@@ -250,6 +367,49 @@ namespace behavior
 
                     return trajectory_and_signal;
                 }
+            }
+
+            // -------------------------------------------------------------------------
+            // Defensive stop for oncoming traffic on the ego lane.
+            //
+            // This is intentionally separate from obstacle avoidance. It covers the
+            // case where another vehicle temporarily drives on the ego lane, e.g.
+            // because it is avoiding a parked vehicle on its own side. A human driver
+            // would slow down or stop and let the other vehicle finish its maneuver.
+            //
+            // Run this before weather/normal/OA planning when no OA lock is active.
+            // -------------------------------------------------------------------------
+            const auto ego_lane_oncoming_result =
+                ::adore::planner::try_plan_ego_lane_oncoming_stop(
+                    planner,
+                    route_with_signal,
+                    vehicle_state_dynamic,
+                    traffic_participants,
+                    params_for_obstacle_avoidance );
+
+            if( ego_lane_oncoming_result.success )
+            {
+                RCLCPP_INFO(
+                    rclcpp::get_logger( "Behaviors" ),
+                    "[OA][EGO_LANE_ONCOMING] participant_id=%d distance=%.2f ttc=%.2f v_route=%.2f stop_s=%.2f reason=%s",
+                    ego_lane_oncoming_result.participant_id,
+                    ego_lane_oncoming_result.participant_distance_s,
+                    ego_lane_oncoming_result.time_to_conflict,
+                    ego_lane_oncoming_result.participant_route_speed,
+                    ego_lane_oncoming_result.stop_s,
+                    ego_lane_oncoming_result.reason.c_str() );
+
+                auto trajectory = ego_lane_oncoming_result.trajectory;
+                trajectory.adjust_start_time( vehicle_state_dynamic.time );
+
+                Behavior trajectory_and_signal;
+                trajectory_and_signal.trajectory =
+                    dynamics::conversions::to_ros_msg( trajectory );
+
+                trajectory_and_signal.modified_route =
+                    map::conversions::to_ros_msg( ego_lane_oncoming_result.modified_route );
+
+                return trajectory_and_signal;
             }
 
             // -------------------------------------------------------------------------
@@ -312,6 +472,7 @@ namespace behavior
 
                     oa_maneuver_lock.lateral_shift = oa_result.lateral_shift;
                     oa_maneuver_lock.in_lane = oa_result.in_lane;
+                    oa_maneuver_lock.maneuver = oa_result.maneuver;
 
                     // Reset last_modified_s when starting a new OA maneuver
                     oa_maneuver_lock.last_modified_s = std::numeric_limits<double>::quiet_NaN();
