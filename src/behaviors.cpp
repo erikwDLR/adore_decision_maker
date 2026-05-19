@@ -332,6 +332,43 @@ namespace behavior
                             "driving mission (OA locked controlled stop: planning failed)" );
                     }
 
+                    if( oa_maneuver_lock.maneuver.active &&
+                        oa_maneuver_lock.maneuver.uses_opposite_lane )
+                    {
+                        const auto planned_monitor_result =
+                            ::adore::planner::monitor_active_obstacle_avoidance_maneuver(
+                                route_with_signal,
+                                vehicle_state_dynamic,
+                                traffic_participants,
+                                oa_maneuver_lock.maneuver,
+                                params_for_obstacle_avoidance,
+                                &trajectory );
+
+                        if( planned_monitor_result.should_abort_before_commitment )
+                        {
+                            RCLCPP_WARN(
+                                rclcpp::get_logger( "Behaviors" ),
+                                "[OA][MONITOR][PLANNED_ABORT] obstacle_id=%d reason=%s",
+                                oa_maneuver_lock.obstacle_id,
+                                planned_monitor_result.reason.c_str() );
+
+                            auto stop_behavior = make_locked_stop_behavior(
+                                "driving mission (OA abort before opposite-lane commitment: planned clear-time unsafe)" );
+
+                            oa_maneuver_lock.reset();
+                            return stop_behavior;
+                        }
+
+                        if( !planned_monitor_result.safe_to_continue )
+                        {
+                            RCLCPP_WARN(
+                                rclcpp::get_logger( "Behaviors" ),
+                                "[OA][MONITOR][PLANNED_COMMITTED] obstacle_id=%d reason=%s",
+                                oa_maneuver_lock.obstacle_id,
+                                planned_monitor_result.reason.c_str() );
+                        }
+                    }
+
                     trajectory.adjust_start_time( vehicle_state_dynamic.time );
 
                     Behavior trajectory_and_signal;

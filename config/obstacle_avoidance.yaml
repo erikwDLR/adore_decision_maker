@@ -5,18 +5,18 @@
     obstacle_avoidance.max_object_ahead: 60.0
     obstacle_avoidance.min_obstacle_route_overlap: 0.5
     obstacle_avoidance.max_projection_distance_from_route: 5.0
-    obstacle_avoidance.max_object_lateral_distance: 20.0
+    obstacle_avoidance.max_object_lateral_distance: 8.0
 
     obstacle_avoidance.ego_corridor_safety_margin: 0.20
-    obstacle_avoidance.side_clearance: 0.4
-    obstacle_avoidance.front_clearance: 2.0
-    obstacle_avoidance.rear_clearance: 2.0
+    obstacle_avoidance.side_clearance: 0.8
+    obstacle_avoidance.front_clearance: 0.0
+    obstacle_avoidance.rear_clearance: 0.0
 
 
-    obstacle_avoidance.entry_extra_distance: 8.0
-    obstacle_avoidance.return_extra_distance: 14.0
+    obstacle_avoidance.entry_extra_distance: 6.0
+    obstacle_avoidance.return_extra_distance: 6.0
 
-    obstacle_avoidance.max_speed_during_avoidance: 2.78 # 10 km/h in m/s
+    obstacle_avoidance.max_speed_during_avoidance: 1.0 #2.78 #2.78 # 10 km/h in m/s
 
     obstacle_avoidance.stop_distance_before_obstacle: 7.0
     obstacle_avoidance.stop_time_step: 0.1
@@ -24,7 +24,7 @@
     obstacle_avoidance.oncoming_lookahead_after_obj: 50.0
     obstacle_avoidance.min_oncoming_heading_diff: 2.35
 
-    obstacle_avoidance.obstacle_cluster_join_gap_s: 8.0
+    obstacle_avoidance.obstacle_cluster_join_gap_s: 14.0
 
     obstacle_avoidance.prefer_left_shift: true
     obstacle_avoidance.overtaking_allowed: true
@@ -33,6 +33,17 @@
     obstacle_avoidance.lane_boundary_join_slack: 0.25
     obstacle_avoidance.lane_s_overlap_slack: 0.50
     obstacle_avoidance.allow_opposite_direction_lanes: true
+
+    # Route-shift candidate generation and hard post-planning validation.
+    # Multiple candidates add extra lateral clearance and optionally stretch
+    # entry/return distances; the actual planned ego trajectory is then checked
+    # against lane bounds and the obstacle envelope before it can be selected.
+    obstacle_avoidance.enable_multi_candidate_route_shift: true
+    obstacle_avoidance.lateral_candidate_extra_steps: 2
+    obstacle_avoidance.lateral_candidate_extra_step: 0.30
+    obstacle_avoidance.candidate_longitudinal_stretch_factor: 1.50
+    obstacle_avoidance.validate_shifted_trajectory: true
+    obstacle_avoidance.trajectory_validation_lateral_margin: 0.05
 
     # Improved oncoming traffic gap-acceptance parameters.
     # The initial gap check uses the planned avoidance trajectory to estimate

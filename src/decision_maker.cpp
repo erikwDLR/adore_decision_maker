@@ -54,6 +54,12 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
 
   params.allow_opposite_direction_lanes = node.declare_parameter<bool>( "obstacle_avoidance.allow_opposite_direction_lanes", params.allow_opposite_direction_lanes );
   params.obstacle_cluster_join_gap_s = node.declare_parameter<double>( "obstacle_avoidance.obstacle_cluster_join_gap_s", params.obstacle_cluster_join_gap_s );
+  params.enable_multi_candidate_route_shift = node.declare_parameter<bool>( "obstacle_avoidance.enable_multi_candidate_route_shift", params.enable_multi_candidate_route_shift );
+  params.lateral_candidate_extra_steps = node.declare_parameter<int>( "obstacle_avoidance.lateral_candidate_extra_steps", params.lateral_candidate_extra_steps );
+  params.lateral_candidate_extra_step = node.declare_parameter<double>( "obstacle_avoidance.lateral_candidate_extra_step", params.lateral_candidate_extra_step );
+  params.candidate_longitudinal_stretch_factor = node.declare_parameter<double>( "obstacle_avoidance.candidate_longitudinal_stretch_factor", params.candidate_longitudinal_stretch_factor );
+  params.validate_shifted_trajectory = node.declare_parameter<bool>( "obstacle_avoidance.validate_shifted_trajectory", params.validate_shifted_trajectory );
+  params.trajectory_validation_lateral_margin = node.declare_parameter<double>( "obstacle_avoidance.trajectory_validation_lateral_margin", params.trajectory_validation_lateral_margin );
 
   // Oncoming traffic gap-acceptance parameters (improved time-based check).
   params.oncoming_time_margin = node.declare_parameter<double>( "obstacle_avoidance.oncoming_time_margin", params.oncoming_time_margin );
