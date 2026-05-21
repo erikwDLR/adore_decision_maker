@@ -41,7 +41,6 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
   params.max_speed_during_avoidance = node.declare_parameter<double>( "obstacle_avoidance.max_speed_during_avoidance", params.max_speed_during_avoidance );
   params.stop_distance_before_obstacle = node.declare_parameter<double>( "obstacle_avoidance.stop_distance_before_obstacle", params.stop_distance_before_obstacle );
   params.stop_time_step = node.declare_parameter<double>( "obstacle_avoidance.stop_time_step", params.stop_time_step );
-  params.oncoming_lookahead_after_obj = node.declare_parameter<double>( "obstacle_avoidance.oncoming_lookahead_after_obj", params.oncoming_lookahead_after_obj );
   params.min_oncoming_heading_diff = node.declare_parameter<double>( "obstacle_avoidance.min_oncoming_heading_diff", params.min_oncoming_heading_diff );
 
   params.prefer_left_shift = node.declare_parameter<bool>( "obstacle_avoidance.prefer_left_shift", params.prefer_left_shift );
@@ -54,6 +53,9 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
 
   params.allow_opposite_direction_lanes = node.declare_parameter<bool>( "obstacle_avoidance.allow_opposite_direction_lanes", params.allow_opposite_direction_lanes );
   params.obstacle_cluster_join_gap_s = node.declare_parameter<double>( "obstacle_avoidance.obstacle_cluster_join_gap_s", params.obstacle_cluster_join_gap_s );
+  params.cluster_hold_gap_s = node.declare_parameter<double>( "obstacle_avoidance.cluster_hold_gap_s", params.cluster_hold_gap_s );
+  params.shift_hull_gap_s = node.declare_parameter<double>( "obstacle_avoidance.shift_hull_gap_s", params.shift_hull_gap_s );
+  params.min_alpha_between_hull_obstacles = node.declare_parameter<double>( "obstacle_avoidance.min_alpha_between_hull_obstacles", params.min_alpha_between_hull_obstacles );
   params.enable_multi_candidate_route_shift = node.declare_parameter<bool>( "obstacle_avoidance.enable_multi_candidate_route_shift", params.enable_multi_candidate_route_shift );
   params.lateral_candidate_extra_steps = node.declare_parameter<int>( "obstacle_avoidance.lateral_candidate_extra_steps", params.lateral_candidate_extra_steps );
   params.lateral_candidate_extra_step = node.declare_parameter<double>( "obstacle_avoidance.lateral_candidate_extra_step", params.lateral_candidate_extra_step );
@@ -67,7 +69,6 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
   params.min_oncoming_speed_for_gap_check = node.declare_parameter<double>( "obstacle_avoidance.min_oncoming_speed_for_gap_check", params.min_oncoming_speed_for_gap_check );
   params.min_oncoming_route_speed = node.declare_parameter<double>( "obstacle_avoidance.min_oncoming_route_speed", params.min_oncoming_route_speed );
   params.prediction_time_horizon = node.declare_parameter<double>( "obstacle_avoidance.prediction_time_horizon", params.prediction_time_horizon );
-  params.prediction_time_step = node.declare_parameter<double>( "obstacle_avoidance.prediction_time_step", params.prediction_time_step );
   params.oncoming_safety_distance_front = node.declare_parameter<double>( "obstacle_avoidance.oncoming_safety_distance_front", params.oncoming_safety_distance_front );
   params.oncoming_safety_distance_rear = node.declare_parameter<double>( "obstacle_avoidance.oncoming_safety_distance_rear", params.oncoming_safety_distance_rear );
   params.debug_oncoming_check = node.declare_parameter<bool>( "obstacle_avoidance.debug_oncoming_check", params.debug_oncoming_check );
@@ -86,7 +87,7 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
     "[OA][params] max_speed=%.3f side_clearance=%.3f front=%.3f rear=%.3f "
     "entry_extra=%.3f return_extra=%.3f corridor_margin=%.3f "
     "overtaking_allowed=%s enforce_drivable_area=%s drivable_margin=%.3f boundary_slack=%.3f s_slack=%.3f opposite_lanes=%s "
-    "obstacle_cluster_join_gap_s=%.3f",
+    "obstacle_cluster_join_gap_s=%.3f cluster_hold_gap_s=%.3f shift_hull_gap_s=%.3f min_alpha_between_hull_obstacles=%.3f",
     params.max_speed_during_avoidance,
     params.side_clearance,
     params.front_clearance,
@@ -100,7 +101,10 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
     params.lane_boundary_join_slack,
     params.lane_s_overlap_slack,
     params.allow_opposite_direction_lanes ? "true" : "false",
-    params.obstacle_cluster_join_gap_s);
+    params.obstacle_cluster_join_gap_s,
+    params.cluster_hold_gap_s,
+    params.shift_hull_gap_s,
+    params.min_alpha_between_hull_obstacles);
 
   return params;
 }

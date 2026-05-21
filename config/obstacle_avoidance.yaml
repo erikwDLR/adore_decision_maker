@@ -1,118 +1,46 @@
 /**:
   ros__parameters:
+    # Static obstacle detection
     obstacle_avoidance.max_static_object_speed: 0.5
-
     obstacle_avoidance.max_object_ahead: 60.0
-    obstacle_avoidance.min_obstacle_route_overlap: 0.5
-    obstacle_avoidance.max_projection_distance_from_route: 5.0
-    obstacle_avoidance.max_object_lateral_distance: 8.0
 
-    obstacle_avoidance.ego_corridor_safety_margin: 0.20
-    obstacle_avoidance.side_clearance: 0.8
-    obstacle_avoidance.front_clearance: 0.0
-    obstacle_avoidance.rear_clearance: 0.0
+    # Safety clearances
+    obstacle_avoidance.side_clearance: 0.4
+    obstacle_avoidance.front_clearance: 2.0
+    obstacle_avoidance.rear_clearance: 2.0
 
+    # Shift profile
+    obstacle_avoidance.entry_extra_distance: 10.0
+    obstacle_avoidance.return_extra_distance: 10.0
+    obstacle_avoidance.max_speed_during_avoidance: 2.78
 
-    obstacle_avoidance.entry_extra_distance: 6.0
-    obstacle_avoidance.return_extra_distance: 6.0
+    # Stop fallback
+    obstacle_avoidance.stop_distance_before_obstacle: 8.0
 
-    obstacle_avoidance.max_speed_during_avoidance: 1.0 #2.78 #2.78 # 10 km/h in m/s
+    # Multi-obstacle grouping / hull curve
+    obstacle_avoidance.cluster_hold_gap_s: 10.0
+    obstacle_avoidance.shift_hull_gap_s: 35.0
+    obstacle_avoidance.min_alpha_between_hull_obstacles: 0.5
 
-    obstacle_avoidance.stop_distance_before_obstacle: 7.0
-    obstacle_avoidance.stop_time_step: 0.1
-
-    obstacle_avoidance.oncoming_lookahead_after_obj: 50.0
-    obstacle_avoidance.min_oncoming_heading_diff: 2.35
-
-    obstacle_avoidance.obstacle_cluster_join_gap_s: 14.0
-
-    obstacle_avoidance.prefer_left_shift: true
+    # Lane / drivable area
     obstacle_avoidance.overtaking_allowed: true
     obstacle_avoidance.enforce_drivable_area: true
-    obstacle_avoidance.drivable_area_margin: 0.10
-    obstacle_avoidance.lane_boundary_join_slack: 0.25
-    obstacle_avoidance.lane_s_overlap_slack: 0.50
     obstacle_avoidance.allow_opposite_direction_lanes: true
 
-    # Route-shift candidate generation and hard post-planning validation.
-    # Multiple candidates add extra lateral clearance and optionally stretch
-    # entry/return distances; the actual planned ego trajectory is then checked
-    # against lane bounds and the obstacle envelope before it can be selected.
-    obstacle_avoidance.enable_multi_candidate_route_shift: true
+    # Candidate generation and validation
     obstacle_avoidance.lateral_candidate_extra_steps: 2
     obstacle_avoidance.lateral_candidate_extra_step: 0.30
-    obstacle_avoidance.candidate_longitudinal_stretch_factor: 1.50
     obstacle_avoidance.validate_shifted_trajectory: true
-    obstacle_avoidance.trajectory_validation_lateral_margin: 0.05
 
-    # Improved oncoming traffic gap-acceptance parameters.
-    # The initial gap check uses the planned avoidance trajectory to estimate
-    # ego clear-time. Active opposite-lane maneuvers are monitored every
-    # decision-maker tick until the configured commitment point is reached.
-    # Before commitment, a new oncoming conflict aborts to a controlled stop.
-    # These parameters control how conservatively the system evaluates oncoming conflicts
-    # when planning to use opposite-direction lanes for obstacle avoidance.
-
-    # Minimum time margin (seconds) that must separate ego's clearance from oncoming arrival.
-    # If the oncoming vehicle arrives within ego_clear_time + oncoming_time_margin,
-    # the maneuver is rejected. Higher values are more conservative.
+    # Oncoming traffic check
     obstacle_avoidance.oncoming_time_margin: 2.0
-
-    # Minimum speed (m/s) used when computing ego clear time to avoid division by zero.
-    # Ego speed estimate is capped by max_speed_during_avoidance if configured,
-    # then lower-bounded by this value.
-    obstacle_avoidance.min_ego_speed_for_gap_check: 1.0
-
-    # Minimum speed (m/s) used for arrival-time division. Static/noise filtering
-    # is handled separately by max_static_object_speed.
-    obstacle_avoidance.min_oncoming_speed_for_gap_check: 0.5
-
-    # Minimum route-aligned speed magnitude (m/s) for detecting oncoming motion.
-    # A participant's route-aligned velocity v_route is computed as:
-    #   v_route = speed * cos(yaw_delta_from_route_yaw)
-    # Only if v_route < -min_oncoming_route_speed is the participant considered oncoming.
-    obstacle_avoidance.min_oncoming_route_speed: 1.0
-
-    # Time horizon (seconds) for oncoming trajectory prediction.
-    # Limits lookahead when predicting where oncoming vehicles will be.
     obstacle_avoidance.prediction_time_horizon: 12.0
-
-    # Reserved for future resampling of predicted trajectories. The current implementation
-    # evaluates the trajectory states provided by the participant object directly.
-    obstacle_avoidance.prediction_time_step: 0.2
-
-    # Safety distance (meters) from ego footprint front to oncoming vehicle rear
-    # during the conflict interval. Provides buffer against prediction uncertainty.
     obstacle_avoidance.oncoming_safety_distance_front: 10.0
-
-    # Safety distance (meters) from ego footprint rear to oncoming vehicle front
-    # during the conflict interval. Provides buffer against prediction uncertainty.
     obstacle_avoidance.oncoming_safety_distance_rear: 5.0
-
-    # Enable detailed debug logging for oncoming conflict checks.
-    # When true, outputs detailed diagnostics about each evaluated gap and participant.
     obstacle_avoidance.debug_oncoming_check: false
-# ============================================================================
-# Defensive stop for vehicles driving on the ego lane in opposite direction
-# ============================================================================
-# Covers the case where another vehicle temporarily uses the ego lane, for
-# example because it avoids a parked vehicle on its own side. The ego vehicle
-# slows/stops and waits instead of continuing toward a head-on conflict.
+
+    # Ego-lane oncoming stop
     obstacle_avoidance.ego_lane_oncoming_stop_enabled: true
-
-# Maximum longitudinal distance ahead of ego for considering such a participant.
     obstacle_avoidance.ego_lane_oncoming_max_distance: 80.0
-
-# Maximum time-to-conflict for triggering the stop. Set <= 0.0 to use distance
-# only. Keep this moderate to avoid braking too early for very distant traffic.
     obstacle_avoidance.ego_lane_oncoming_time_horizon: 12.0
-
-# Required route-aligned speed against ego route direction.
-    obstacle_avoidance.ego_lane_oncoming_min_route_speed: 1.0
-
-# Extra lateral tolerance around the ego lane/corridor for footprint overlap.
-    obstacle_avoidance.ego_lane_oncoming_lateral_margin: 0.2
-
-# Desired distance between ego front and nearest oncoming participant footprint
-# when ego stops.
     obstacle_avoidance.ego_lane_oncoming_stop_distance: 15.0
