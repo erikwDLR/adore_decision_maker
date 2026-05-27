@@ -1,46 +1,39 @@
 /**:
   ros__parameters:
-    # Static obstacle detection
+    obstacle_avoidance.enabled: true
+
+    # Object detection
+    obstacle_avoidance.max_object_ahead: 50.0
     obstacle_avoidance.max_static_object_speed: 0.5
-    obstacle_avoidance.max_object_ahead: 60.0
 
-    # Safety clearances
+    # Ego-route relevance corridor
+    obstacle_avoidance.ego_corridor_safety_margin: 0.2
+
+    # Real lateral object clearance
     obstacle_avoidance.side_clearance: 0.4
-    obstacle_avoidance.front_clearance: 2.0
-    obstacle_avoidance.rear_clearance: 2.0
 
-    # Shift profile
-    obstacle_avoidance.entry_extra_distance: 10.0
-    obstacle_avoidance.return_extra_distance: 10.0
-    obstacle_avoidance.max_speed_during_avoidance: 2.78
+    # Longitudinal maneuver geometry
+    obstacle_avoidance.front_clearance: 6.0
+    obstacle_avoidance.rear_clearance: 6.0
+    obstacle_avoidance.stop_before_obstacle: 10.0
 
-    # Stop fallback
-    obstacle_avoidance.stop_distance_before_obstacle: 8.0
+    # Mode switches
+    obstacle_avoidance.in_lane_shift_enabled: true
+    obstacle_avoidance.adjacent_lane_enabled: true
+    obstacle_avoidance.opposite_lane_enabled: true #false
+    obstacle_avoidance.clustering_enabled: true
 
-    # Multi-obstacle grouping / hull curve
-    obstacle_avoidance.cluster_hold_gap_s: 10.0
-    obstacle_avoidance.shift_hull_gap_s: 35.0
-    obstacle_avoidance.min_alpha_between_hull_obstacles: 0.5
-
-    # Lane / drivable area
-    obstacle_avoidance.overtaking_allowed: true
+    # Drivable area / route behavior
     obstacle_avoidance.enforce_drivable_area: true
-    obstacle_avoidance.allow_opposite_direction_lanes: true
+    obstacle_avoidance.max_speed_during_avoidance: 2.78 # 10 km/h
 
-    # Candidate generation and validation
+    # Candidate generation
+    obstacle_avoidance.validate_shifted_trajectory: true
     obstacle_avoidance.lateral_candidate_extra_steps: 2
     obstacle_avoidance.lateral_candidate_extra_step: 0.30
-    obstacle_avoidance.validate_shifted_trajectory: true
 
-    # Oncoming traffic check
-    obstacle_avoidance.oncoming_time_margin: 2.0
-    obstacle_avoidance.prediction_time_horizon: 12.0
-    obstacle_avoidance.oncoming_safety_distance_front: 10.0
-    obstacle_avoidance.oncoming_safety_distance_rear: 5.0
-    obstacle_avoidance.debug_oncoming_check: false
-
-    # Ego-lane oncoming stop
-    obstacle_avoidance.ego_lane_oncoming_stop_enabled: true
-    obstacle_avoidance.ego_lane_oncoming_max_distance: 80.0
-    obstacle_avoidance.ego_lane_oncoming_time_horizon: 12.0
-    obstacle_avoidance.ego_lane_oncoming_stop_distance: 15.0
+    # Active route monitor
+    obstacle_avoidance.modified_route_safety_check_enabled: true
+    obstacle_avoidance.modified_route_max_check_distance: 50.0
+    obstacle_avoidance.modified_route_time_horizon: 12.0
+    obstacle_avoidance.stop_on_modified_route_conflict: true
