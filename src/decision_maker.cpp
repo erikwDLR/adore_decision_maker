@@ -50,6 +50,52 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
   params.modified_route_time_horizon = node.declare_parameter<double>( "obstacle_avoidance.modified_route_time_horizon", params.modified_route_time_horizon );
   params.stop_on_modified_route_conflict = node.declare_parameter<bool>( "obstacle_avoidance.stop_on_modified_route_conflict", params.stop_on_modified_route_conflict );
 
+  // Internal/advanced parameters
+  params.max_object_lateral_distance = node.declare_parameter<double>( "obstacle_avoidance.max_object_lateral_distance", params.max_object_lateral_distance );
+  params.min_obstacle_route_overlap = node.declare_parameter<double>( "obstacle_avoidance.min_obstacle_route_overlap", params.min_obstacle_route_overlap );
+  params.min_oncoming_heading_diff = node.declare_parameter<double>( "obstacle_avoidance.min_oncoming_heading_diff", params.min_oncoming_heading_diff );
+  params.stop_time_step = node.declare_parameter<double>( "obstacle_avoidance.stop_time_step", params.stop_time_step );
+  params.prefer_left_shift = node.declare_parameter<bool>( "obstacle_avoidance.prefer_left_shift", params.prefer_left_shift );
+  params.lane_s_overlap_slack = node.declare_parameter<double>( "obstacle_avoidance.lane_s_overlap_slack", params.lane_s_overlap_slack );
+  params.max_projection_distance_from_route = node.declare_parameter<double>( "obstacle_avoidance.max_projection_distance_from_route", params.max_projection_distance_from_route );
+  params.obstacle_cluster_join_gap_s = node.declare_parameter<double>( "obstacle_avoidance.obstacle_cluster_join_gap_s", params.obstacle_cluster_join_gap_s );
+  params.cluster_hold_gap_s = node.declare_parameter<double>( "obstacle_avoidance.cluster_hold_gap_s", params.cluster_hold_gap_s );
+  params.shift_hull_gap_s = node.declare_parameter<double>( "obstacle_avoidance.shift_hull_gap_s", params.shift_hull_gap_s );
+  params.min_alpha_between_hull_obstacles = node.declare_parameter<double>( "obstacle_avoidance.min_alpha_between_hull_obstacles", params.min_alpha_between_hull_obstacles );
+  params.enable_multi_candidate_route_shift = node.declare_parameter<bool>( "obstacle_avoidance.enable_multi_candidate_route_shift", params.enable_multi_candidate_route_shift );
+
+  // Oncoming traffic gap-acceptance parameters
+  params.oncoming_time_margin = node.declare_parameter<double>( "obstacle_avoidance.oncoming_time_margin", params.oncoming_time_margin );
+  params.min_ego_speed_for_gap_check = node.declare_parameter<double>( "obstacle_avoidance.min_ego_speed_for_gap_check", params.min_ego_speed_for_gap_check );
+  params.min_oncoming_speed_for_gap_check = node.declare_parameter<double>( "obstacle_avoidance.min_oncoming_speed_for_gap_check", params.min_oncoming_speed_for_gap_check );
+  params.min_oncoming_route_speed = node.declare_parameter<double>( "obstacle_avoidance.min_oncoming_route_speed", params.min_oncoming_route_speed );
+  params.prediction_time_horizon = node.declare_parameter<double>( "obstacle_avoidance.prediction_time_horizon", params.prediction_time_horizon );
+  params.oncoming_safety_distance_front = node.declare_parameter<double>( "obstacle_avoidance.oncoming_safety_distance_front", params.oncoming_safety_distance_front );
+  params.oncoming_safety_distance_rear = node.declare_parameter<double>( "obstacle_avoidance.oncoming_safety_distance_rear", params.oncoming_safety_distance_rear );
+  params.debug_oncoming_check = node.declare_parameter<bool>( "obstacle_avoidance.debug_oncoming_check", params.debug_oncoming_check );
+
+  // Ego-lane oncoming stop behavior parameters
+  params.ego_lane_oncoming_stop_enabled = node.declare_parameter<bool>( "obstacle_avoidance.ego_lane_oncoming_stop_enabled", params.ego_lane_oncoming_stop_enabled );
+  params.ego_lane_oncoming_max_distance = node.declare_parameter<double>( "obstacle_avoidance.ego_lane_oncoming_max_distance", params.ego_lane_oncoming_max_distance );
+  params.ego_lane_oncoming_time_horizon = node.declare_parameter<double>( "obstacle_avoidance.ego_lane_oncoming_time_horizon", params.ego_lane_oncoming_time_horizon );
+  params.ego_lane_oncoming_min_route_speed = node.declare_parameter<double>( "obstacle_avoidance.ego_lane_oncoming_min_route_speed", params.ego_lane_oncoming_min_route_speed );
+  params.ego_lane_oncoming_lateral_margin = node.declare_parameter<double>( "obstacle_avoidance.ego_lane_oncoming_lateral_margin", params.ego_lane_oncoming_lateral_margin );
+  params.ego_lane_oncoming_stop_distance = node.declare_parameter<double>( "obstacle_avoidance.ego_lane_oncoming_stop_distance", params.ego_lane_oncoming_stop_distance );
+
+  // Active modified-route safety monitor parameters
+  params.modified_route_ttc_margin = node.declare_parameter<double>( "obstacle_avoidance.modified_route_ttc_margin", params.modified_route_ttc_margin );
+  params.modified_route_stop_ttc_threshold = node.declare_parameter<double>( "obstacle_avoidance.modified_route_stop_ttc_threshold", params.modified_route_stop_ttc_threshold );
+  params.modified_route_braking_safety_margin = node.declare_parameter<double>( "obstacle_avoidance.modified_route_braking_safety_margin", params.modified_route_braking_safety_margin );
+  params.min_valid_stop_margin = node.declare_parameter<double>( "obstacle_avoidance.min_valid_stop_margin", params.min_valid_stop_margin );
+
+  // Ghost memory parameters
+  params.ghost_obstacle_hold_time = node.declare_parameter<double>( "obstacle_avoidance.ghost_obstacle_hold_time", params.ghost_obstacle_hold_time );
+  params.ghost_obstacle_release_extra_s = node.declare_parameter<double>( "obstacle_avoidance.ghost_obstacle_release_extra_s", params.ghost_obstacle_release_extra_s );
+  params.ghost_obstacle_match_s_margin = node.declare_parameter<double>( "obstacle_avoidance.ghost_obstacle_match_s_margin", params.ghost_obstacle_match_s_margin );
+  params.ghost_obstacle_match_l_margin = node.declare_parameter<double>( "obstacle_avoidance.ghost_obstacle_match_l_margin", params.ghost_obstacle_match_l_margin );
+  params.ghost_obstacle_max_lifetime = node.declare_parameter<double>( "obstacle_avoidance.ghost_obstacle_max_lifetime", params.ghost_obstacle_max_lifetime );
+  params.ghost_dynamic_max_missing_cycles = node.declare_parameter<int>( "obstacle_avoidance.ghost_dynamic_max_missing_cycles", params.ghost_dynamic_max_missing_cycles );
+
   if( params.stop_before_obstacle <= params.front_clearance )
   {
     const double old_stop_before_obstacle = params.stop_before_obstacle;

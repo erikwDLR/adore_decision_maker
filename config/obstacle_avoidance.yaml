@@ -1,31 +1,35 @@
 /**:
   ros__parameters:
+    # --------------------------------------------------------------------------
+    # Public baseline parameters
+    # --------------------------------------------------------------------------
+
     obstacle_avoidance.enabled: true
 
     # Object detection
-    obstacle_avoidance.max_object_ahead: 50.0
+    obstacle_avoidance.max_object_ahead: 60.0
     obstacle_avoidance.max_static_object_speed: 0.5
 
     # Ego-route relevance corridor
     obstacle_avoidance.ego_corridor_safety_margin: 0.2
 
     # Real lateral object clearance
-    obstacle_avoidance.side_clearance: 0.4
+    obstacle_avoidance.side_clearance: 0.5
 
     # Longitudinal maneuver geometry
-    obstacle_avoidance.front_clearance: 6.0
-    obstacle_avoidance.rear_clearance: 6.0
-    obstacle_avoidance.stop_before_obstacle: 10.0
+    obstacle_avoidance.front_clearance: 4.0
+    obstacle_avoidance.rear_clearance: 4.0
+    obstacle_avoidance.stop_before_obstacle: 7.0
 
     # Mode switches
     obstacle_avoidance.in_lane_shift_enabled: true
     obstacle_avoidance.adjacent_lane_enabled: true
-    obstacle_avoidance.opposite_lane_enabled: true #false
+    obstacle_avoidance.opposite_lane_enabled: true
     obstacle_avoidance.clustering_enabled: true
 
     # Drivable area / route behavior
     obstacle_avoidance.enforce_drivable_area: true
-    obstacle_avoidance.max_speed_during_avoidance: 2.78 # 10 km/h
+    obstacle_avoidance.max_speed_during_avoidance: 2.7
 
     # Candidate generation
     obstacle_avoidance.validate_shifted_trajectory: true
@@ -34,6 +38,101 @@
 
     # Active route monitor
     obstacle_avoidance.modified_route_safety_check_enabled: true
-    obstacle_avoidance.modified_route_max_check_distance: 50.0
+    obstacle_avoidance.modified_route_max_check_distance: 60.0
     obstacle_avoidance.modified_route_time_horizon: 12.0
     obstacle_avoidance.stop_on_modified_route_conflict: true
+
+    # --------------------------------------------------------------------------
+    # Internal/advanced parameters
+    # --------------------------------------------------------------------------
+
+    # Plausibility filter for bad route projections / unrelated objects
+    obstacle_avoidance.max_object_lateral_distance: 8.0
+
+    obstacle_avoidance.min_obstacle_route_overlap: 0.5
+    obstacle_avoidance.min_oncoming_heading_diff: 2.35
+    obstacle_avoidance.stop_time_step: 0.1
+
+    # If left and right are equally good, prefer left (right-hand traffic overtaking)
+    obstacle_avoidance.prefer_left_shift: true
+
+    # Longitudinal tolerance for neighbouring lane availability
+    obstacle_avoidance.lane_s_overlap_slack: 0.50
+
+    obstacle_avoidance.max_projection_distance_from_route: 5.0
+
+    # Multi-obstacle grouping parameters
+    obstacle_avoidance.obstacle_cluster_join_gap_s: 10.0
+    obstacle_avoidance.cluster_hold_gap_s: 10.0
+    obstacle_avoidance.shift_hull_gap_s: 20.0
+
+    # Minimum shift fraction between hull-linked obstacles
+    obstacle_avoidance.min_alpha_between_hull_obstacles: 0.5
+
+    # Internal switch for evaluating extra lateral shift variants
+    obstacle_avoidance.enable_multi_candidate_route_shift: true
+
+    # --------------------------------------------------------------------------
+    # Oncoming traffic gap-acceptance parameters
+    # --------------------------------------------------------------------------
+
+    # Minimum time margin before an oncoming vehicle arrives at conflict area
+    obstacle_avoidance.oncoming_time_margin: 2.0
+
+    # Minimum speed for ego vehicle when computing clear time
+    obstacle_avoidance.min_ego_speed_for_gap_check: 1.0
+
+    # Minimum speed used when computing oncoming arrival time
+    obstacle_avoidance.min_oncoming_speed_for_gap_check: 1.0
+
+    # Minimum route-aligned speed for oncoming participant
+    obstacle_avoidance.min_oncoming_route_speed: 1.0
+
+    # Time horizon for predicting participant trajectories
+    obstacle_avoidance.prediction_time_horizon: 15.0
+
+    # Safety distances during oncoming conflict
+    obstacle_avoidance.oncoming_safety_distance_front: 10.0
+    obstacle_avoidance.oncoming_safety_distance_rear: 5.0
+
+    # Enable detailed debug logging for oncoming conflict checks
+    obstacle_avoidance.debug_oncoming_check: false
+
+    # --------------------------------------------------------------------------
+    # Ego-lane oncoming stop behavior
+    # --------------------------------------------------------------------------
+
+    # Enable defensive stop for oncoming participants in ego lane
+    obstacle_avoidance.ego_lane_oncoming_stop_enabled: true
+
+    # Maximum longitudinal distance ahead of ego for oncoming participant
+    obstacle_avoidance.ego_lane_oncoming_max_distance: 100.0
+
+    # Maximum time-to-conflict for triggering defensive stop
+    obstacle_avoidance.ego_lane_oncoming_time_horizon: 15.0
+
+    # Required route-aligned speed against ego route direction
+    obstacle_avoidance.ego_lane_oncoming_min_route_speed: 1.0
+
+    # Additional lateral tolerance around current ego lane
+    obstacle_avoidance.ego_lane_oncoming_lateral_margin: 0.20
+
+    # Desired distance between ego front and nearest footprint point of oncoming participant
+    obstacle_avoidance.ego_lane_oncoming_stop_distance: 15.0
+
+    # --------------------------------------------------------------------------
+    # Active modified-route safety monitor parameters
+    # --------------------------------------------------------------------------
+
+    obstacle_avoidance.modified_route_ttc_margin: 2.0
+    obstacle_avoidance.modified_route_stop_ttc_threshold: 5.0
+    obstacle_avoidance.modified_route_braking_safety_margin: 5.0
+    obstacle_avoidance.min_valid_stop_margin: 1.0
+
+    # Ghost memory for obstacles that were relevant during active OA lock
+    obstacle_avoidance.ghost_obstacle_hold_time: 2.0
+    obstacle_avoidance.ghost_obstacle_release_extra_s: 5.0
+    obstacle_avoidance.ghost_obstacle_match_s_margin: 3.0
+    obstacle_avoidance.ghost_obstacle_match_l_margin: 1.0
+    obstacle_avoidance.ghost_obstacle_max_lifetime: 10.0
+    obstacle_avoidance.ghost_dynamic_max_missing_cycles: 5
