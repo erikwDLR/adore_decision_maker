@@ -65,6 +65,42 @@ ids_to_string( const std::vector<int>& ids )
     return text;
 }
 
+std::string
+obstacle_avoidance_label(
+    planner::ObstacleAvoidanceMode mode,
+    bool in_lane,
+    double lateral_shift,
+    bool locked )
+{
+    const std::string prefix =
+        locked
+            ? "driving mission (OA locked"
+            : "driving mission (obstacle avoidance";
+
+    if( in_lane )
+    {
+        return locked
+            ? "driving mission (OA locked in-lane)"
+            : "driving mission (in-lane obstacle avoidance)";
+    }
+
+    if( mode == planner::ObstacleAvoidanceMode::OvertakeLeft ||
+        lateral_shift > 1e-6 )
+    {
+        return prefix + " left)";
+    }
+
+    if( mode == planner::ObstacleAvoidanceMode::OvertakeRight ||
+        lateral_shift < -1e-6 )
+    {
+        return prefix + " right)";
+    }
+
+    return locked
+        ? "driving mission (OA locked)"
+        : "driving mission (obstacle avoidance)";
+}
+
 bool
 envelopes_overlap_with_margin(
     const planner::LockedObstacleEnvelope& a,
@@ -847,6 +883,53 @@ make_emergency_hold_behavior(
 }
 
 Behavior
+make_stop_on_route_behavior(
+    planner::TrajectoryPlanner& planner,
+    const map::Route& active_route,
+    const dynamics::VehicleStateDynamic& ego,
+    const dynamics::TrafficParticipantSet& traffic_participants,
+    const planner::ObstacleAvoidanceParams& params,
+    const std::string& reason,
+    const std::string& active_route_name )
+{
+    auto stop_route =
+        make_stop_route_on_active_route(
+            active_route,
+            ego,
+            std::numeric_limits<double>::quiet_NaN(),
+            planner.get_physical_vehicle_parameters(),
+            params,
+            reason,
+            active_route_name );
+
+    dynamics::Trajectory trajectory;
+    try
+    {
+        PreviousTrajectoryFallbackGuard fallback_guard( planner );
+        trajectory =
+            planner.plan_route_trajectory(
+                stop_route,
+                ego,
+                traffic_participants );
+    }
+    catch( const std::exception& e )
+    {
+        RCLCPP_ERROR(
+            rclcpp::get_logger( "Behaviors" ),
+            "[OA][STOP_ROUTE] planner exception on route-only stop; publishing stop route without free-space fallback: %s",
+            e.what() );
+    }
+
+    trajectory.adjust_start_time( ego.time );
+    trajectory.label = "obstacle avoidance: stop on " + active_route_name + "_route";
+
+    Behavior behavior;
+    behavior.trajectory = dynamics::conversions::to_ros_msg( trajectory );
+    behavior.modified_route = map::conversions::to_ros_msg( stop_route );
+    return behavior;
+}
+
+Behavior
 make_stop_on_active_route_behavior(
     planner::TrajectoryPlanner& planner,
     const map::Route& active_route,
@@ -1340,8 +1423,69 @@ make_stop_on_active_route_behavior(
                                     vehicle_state_dynamic,
                                     params_for_obstacle_avoidance );
 
-                                auto trajectory = replan_result.trajectory;
+                                dynamics::Trajectory trajectory;
+                                double replan_ego_s =
+                                    get_s_on_reference_line_segments(
+                                        replan_result.modified_route,
+                                        vehicle_state_dynamic,
+                                        route_with_signal.get_s( vehicle_state_dynamic ),
+                                        20.0 );
+                                if( !std::isfinite( replan_ego_s ) )
+                                {
+                                    replan_ego_s = route_with_signal.get_s( vehicle_state_dynamic );
+                                    RCLCPP_WARN(
+                                        rclcpp::get_logger( "Behaviors" ),
+                                        "[OA][ROUTE_ONLY][REPLAN] modified-route projection failed; using original-route s=%.2f",
+                                        replan_ego_s );
+                                }
+
+                                try
+                                {
+                                    trajectory =
+                                        planner.plan_route_trajectory_from_s(
+                                            replan_result.modified_route,
+                                            vehicle_state_dynamic,
+                                            traffic_participants,
+                                            replan_ego_s );
+                                }
+                                catch( const std::exception& e )
+                                {
+                                    RCLCPP_ERROR(
+                                        rclcpp::get_logger( "Behaviors" ),
+                                        "[OA][ROUTE_ONLY][REPLAN] planner exception on accepted modified_route; stopping on previous active route: %s",
+                                        e.what() );
+                                    return make_stop_on_active_route_behavior(
+                                        planner,
+                                        active_route,
+                                        active_conflict.value(),
+                                        vehicle_state_dynamic,
+                                        traffic_participants,
+                                        params_for_obstacle_avoidance,
+                                        "modified" );
+                                }
+
+                                if( trajectory.states.empty() )
+                                {
+                                    RCLCPP_ERROR(
+                                        rclcpp::get_logger( "Behaviors" ),
+                                        "[OA][ROUTE_ONLY][REPLAN] planner returned empty trajectory; stopping on previous active route" );
+                                    return make_stop_on_active_route_behavior(
+                                        planner,
+                                        active_route,
+                                        active_conflict.value(),
+                                        vehicle_state_dynamic,
+                                        traffic_participants,
+                                        params_for_obstacle_avoidance,
+                                        "modified" );
+                                }
+
                                 trajectory.adjust_start_time( vehicle_state_dynamic.time );
+                                trajectory.label =
+                                    obstacle_avoidance_label(
+                                        replan_result.mode,
+                                        replan_result.in_lane,
+                                        replan_result.lateral_shift,
+                                        false );
 
                                 Behavior trajectory_and_signal;
                                 trajectory_and_signal.trajectory =
@@ -1520,7 +1664,12 @@ make_stop_on_active_route_behavior(
                         }
 
                         trajectory.label =
-                            "driving mission (OA locked, " + weather_label + ")";
+                            obstacle_avoidance_label(
+                                oa_maneuver_lock.maneuver.mode,
+                                oa_maneuver_lock.in_lane,
+                                oa_maneuver_lock.lateral_shift,
+                                true ) +
+                            " (" + weather_label + ")";
                     }
                     else
                     {
@@ -1543,7 +1692,12 @@ make_stop_on_active_route_behavior(
                                 "driving mission (OA locked planner exception)" );
                         }
 
-                        trajectory.label = "driving mission (OA locked)";
+                        trajectory.label =
+                            obstacle_avoidance_label(
+                                oa_maneuver_lock.maneuver.mode,
+                                oa_maneuver_lock.in_lane,
+                                oa_maneuver_lock.lateral_shift,
+                                true );
                     }
 
                     if( trajectory.states.empty() )
@@ -2000,8 +2154,72 @@ make_stop_on_active_route_behavior(
                     return trajectory_and_signal;
                 }
 
-                auto trajectory = oa_result.trajectory;
+                dynamics::Trajectory trajectory;
+                const double ego_s_original =
+                    route_with_signal.get_s( vehicle_state_dynamic );
+                double ego_s_modified =
+                    get_s_on_reference_line_segments(
+                        oa_result.modified_route,
+                        vehicle_state_dynamic,
+                        ego_s_original,
+                        20.0 );
+
+                if( !std::isfinite( ego_s_modified ) )
+                {
+                    ego_s_modified = ego_s_original;
+                    RCLCPP_WARN(
+                        rclcpp::get_logger( "Behaviors" ),
+                        "[OA][ROUTE_ONLY] modified-route projection failed; using original-route s=%.2f",
+                        ego_s_modified );
+                }
+
+                try
+                {
+                    trajectory =
+                        planner.plan_route_trajectory_from_s(
+                            oa_result.modified_route,
+                            vehicle_state_dynamic,
+                            traffic_participants,
+                            ego_s_modified );
+                }
+                catch( const std::exception& e )
+                {
+                    RCLCPP_ERROR(
+                        rclcpp::get_logger( "Behaviors" ),
+                        "[OA][ROUTE_ONLY] planner exception on accepted modified_route; stopping on original route: %s",
+                        e.what() );
+                    return make_stop_on_route_behavior(
+                        planner,
+                        route_with_signal,
+                        vehicle_state_dynamic,
+                        traffic_participants,
+                        params_for_obstacle_avoidance,
+                        "OA route-only planner exception",
+                        "original" );
+                }
+
+                if( trajectory.states.empty() )
+                {
+                    RCLCPP_ERROR(
+                        rclcpp::get_logger( "Behaviors" ),
+                        "[OA][ROUTE_ONLY] planner returned empty trajectory on accepted modified_route; stopping on original route" );
+                    return make_stop_on_route_behavior(
+                        planner,
+                        route_with_signal,
+                        vehicle_state_dynamic,
+                        traffic_participants,
+                        params_for_obstacle_avoidance,
+                        "OA route-only planning failed",
+                        "original" );
+                }
+
                 trajectory.adjust_start_time( vehicle_state_dynamic.time );
+                trajectory.label =
+                    obstacle_avoidance_label(
+                        oa_result.mode,
+                        oa_result.in_lane,
+                        oa_result.lateral_shift,
+                        false );
 
                 Behavior trajectory_and_signal;
                 trajectory_and_signal.trajectory =

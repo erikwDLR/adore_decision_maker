@@ -14,12 +14,12 @@
     obstacle_avoidance.ego_corridor_safety_margin: 0.2
 
     # Real lateral object clearance
-    obstacle_avoidance.side_clearance: 0.5
+    obstacle_avoidance.side_clearance: 1.0
 
     # Longitudinal maneuver geometry
-    obstacle_avoidance.front_clearance: 4.0
-    obstacle_avoidance.rear_clearance: 4.0
-    obstacle_avoidance.stop_before_obstacle: 7.0
+    obstacle_avoidance.front_clearance: 7.0
+    obstacle_avoidance.rear_clearance: 7.0
+    obstacle_avoidance.stop_before_obstacle: 8.0
 
     # Mode switches
     obstacle_avoidance.in_lane_shift_enabled: true
@@ -62,8 +62,8 @@
     obstacle_avoidance.max_projection_distance_from_route: 5.0
 
     # Multi-obstacle grouping parameters
-    obstacle_avoidance.obstacle_cluster_join_gap_s: 10.0
-    obstacle_avoidance.cluster_hold_gap_s: 10.0
+    obstacle_avoidance.obstacle_cluster_join_gap_s: 5.0
+    obstacle_avoidance.cluster_hold_gap_s: 5.0
     obstacle_avoidance.shift_hull_gap_s: 20.0
 
     # Minimum shift fraction between hull-linked obstacles
