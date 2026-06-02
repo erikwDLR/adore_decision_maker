@@ -14,7 +14,7 @@
     obstacle_avoidance.ego_corridor_safety_margin: 0.2
 
     # Real lateral object clearance
-    obstacle_avoidance.side_clearance: 1.0
+    obstacle_avoidance.side_clearance: 0.8
 
     # Longitudinal maneuver geometry
     obstacle_avoidance.front_clearance: 7.0
@@ -59,11 +59,13 @@
     # Longitudinal tolerance for neighbouring lane availability
     obstacle_avoidance.lane_s_overlap_slack: 0.50
 
+    # Lateral tolerance for joining adjacent lane-border intervals
+    obstacle_avoidance.lane_boundary_join_slack: 0.25
+
     obstacle_avoidance.max_projection_distance_from_route: 5.0
 
     # Multi-obstacle grouping parameters
-    obstacle_avoidance.obstacle_cluster_join_gap_s: 5.0
-    obstacle_avoidance.cluster_hold_gap_s: 5.0
+    obstacle_avoidance.cluster_hold_gap_s: 10.0
     obstacle_avoidance.shift_hull_gap_s: 20.0
 
     # Minimum shift fraction between hull-linked obstacles
@@ -129,7 +131,7 @@
     obstacle_avoidance.modified_route_braking_safety_margin: 5.0
     obstacle_avoidance.min_valid_stop_margin: 1.0
 
-    # Ghost memory for obstacles that were relevant during active OA lock
+    # Ghost memory for obstacles that were relevant during an active avoidance state
     obstacle_avoidance.ghost_obstacle_hold_time: 2.0
     obstacle_avoidance.ghost_obstacle_release_extra_s: 5.0
     obstacle_avoidance.ghost_obstacle_match_s_margin: 3.0

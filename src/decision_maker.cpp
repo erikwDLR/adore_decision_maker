@@ -57,8 +57,8 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
   params.stop_time_step = node.declare_parameter<double>( "obstacle_avoidance.stop_time_step", params.stop_time_step );
   params.prefer_left_shift = node.declare_parameter<bool>( "obstacle_avoidance.prefer_left_shift", params.prefer_left_shift );
   params.lane_s_overlap_slack = node.declare_parameter<double>( "obstacle_avoidance.lane_s_overlap_slack", params.lane_s_overlap_slack );
+  params.lane_boundary_join_slack = node.declare_parameter<double>( "obstacle_avoidance.lane_boundary_join_slack", params.lane_boundary_join_slack );
   params.max_projection_distance_from_route = node.declare_parameter<double>( "obstacle_avoidance.max_projection_distance_from_route", params.max_projection_distance_from_route );
-  params.obstacle_cluster_join_gap_s = node.declare_parameter<double>( "obstacle_avoidance.obstacle_cluster_join_gap_s", params.obstacle_cluster_join_gap_s );
   params.cluster_hold_gap_s = node.declare_parameter<double>( "obstacle_avoidance.cluster_hold_gap_s", params.cluster_hold_gap_s );
   params.shift_hull_gap_s = node.declare_parameter<double>( "obstacle_avoidance.shift_hull_gap_s", params.shift_hull_gap_s );
   params.min_alpha_between_hull_obstacles = node.declare_parameter<double>( "obstacle_avoidance.min_alpha_between_hull_obstacles", params.min_alpha_between_hull_obstacles );
@@ -114,7 +114,7 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
     "in_lane=%s adjacent=%s opposite=%s clustering=%s enforce_drivable_area=%s max_speed=%.3f "
     "validate_shifted_trajectory=%s lateral_candidate_extra_steps=%d lateral_candidate_extra_step=%.3f "
     "modified_route_monitor=%s modified_route_max_check_distance=%.3f modified_route_time_horizon=%.3f "
-    "stop_on_modified_route_conflict=%s",
+    "stop_on_modified_route_conflict=%s lane_s_overlap_slack=%.3f lane_boundary_join_slack=%.3f",
     params.enabled ? "true" : "false",
     params.max_object_ahead,
     params.max_static_object_speed,
@@ -135,7 +135,9 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
     params.modified_route_safety_check_enabled ? "true" : "false",
     params.modified_route_max_check_distance,
     params.modified_route_time_horizon,
-    params.stop_on_modified_route_conflict ? "true" : "false" );
+    params.stop_on_modified_route_conflict ? "true" : "false",
+    params.lane_s_overlap_slack,
+    params.lane_boundary_join_slack );
 
   return params;
 }
@@ -387,7 +389,7 @@ behavior::Behavior DecisionMaker::choose_and_plan_driving_behavior()
                                 traffic_signals,
                                 latest_weather,
                                 obstacle_avoidance_params,
-                                oa_maneuver_lock
+                                active_avoidance_state
                               );
   }
 

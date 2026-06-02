@@ -11,11 +11,11 @@ namespace adore
 namespace behavior
 {
 
-struct ObstacleAvoidanceLock
+struct ActiveAvoidanceState
 {
   bool active = false;
 
-  // The unmodified avoidance route selected for the active maneuver. Temporary
+  // The avoidance route selected for the active maneuver. Temporary
   // braking/waiting stop profiles are built on copies so the maneuver can
   // continue once a transient conflict clears.
   adore::map::Route base_modified_route;
@@ -32,8 +32,13 @@ struct ObstacleAvoidanceLock
   bool in_lane = false;
 
   adore::planner::ObstacleAvoidanceManeuver maneuver;
-  std::vector<adore::planner::LockedObstacleEnvelope> locked_obstacles;
 
+  // Geometry/time memory for obstacles that may disappear from perception while
+  // ego is still passing them or while they conflict with the active route.
+  std::vector<adore::planner::ObstacleGhostEnvelope> ghost_memory;
+
+  // Last valid projection on the active modified route. This keeps progress
+  // monotonic while the route is laterally offset from the mission route.
   double last_modified_s = std::numeric_limits<double>::quiet_NaN();
 
   void reset()
@@ -53,7 +58,7 @@ struct ObstacleAvoidanceLock
     in_lane = false;
 
     maneuver = adore::planner::ObstacleAvoidanceManeuver{};
-    locked_obstacles.clear();
+    ghost_memory.clear();
 
     last_modified_s = std::numeric_limits<double>::quiet_NaN();
   }

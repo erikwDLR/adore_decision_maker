@@ -36,7 +36,7 @@
 #include "adore_ros2_msgs/msg/odd.hpp"
 
 #include "planning/obstacle_avoidance.hpp"
-#include "oa_maneuver_lock.hpp"
+#include "active_avoidance_state.hpp"
 
 namespace adore
 {
@@ -60,7 +60,7 @@ namespace behavior
                                 const std::map<size_t, adore_ros2_msgs::msg::TrafficSignal>& traffic_signals,
                                 const std::optional<adore_ros2_msgs::msg::Weather>& weather,
                                 const planner::ObstacleAvoidanceParams& obstacle_avoidance_params,
-                                ObstacleAvoidanceLock& oa_maneuver_lock
+                                ActiveAvoidanceState& active_avoidance_state
     );
 
     Behavior driving_mission_following_managed(
