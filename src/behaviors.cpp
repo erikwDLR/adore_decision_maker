@@ -683,9 +683,13 @@ compute_route_stop_plan(
         std::isfinite( conflict.object_s_min )
             ? conflict.object_s_min
             : plan.ego_s + params.stop_before_obstacle;
+    const double ego_front_offset =
+        vehicle_params.wheelbase + vehicle_params.front_axle_to_front_border;
 
     plan.stop_s =
-        conflict_s - params.stop_before_obstacle;
+        conflict_s -
+        std::max( 0.0, params.stop_before_obstacle ) -
+        ego_front_offset;
 
     plan.braking_deceleration =
         std::max( 0.1, std::fabs( vehicle_params.acceleration_min ) );
@@ -733,7 +737,12 @@ should_stop_for_active_conflict(
     if( conflict.predicted_spatiotemporal_conflict &&
         conflict.time_to_conflict <= params.modified_route_stop_ttc_threshold )
     {
-        return true;
+        if( conflict.object_class != planner::RouteCorridorObjectClass::StaticOrSlow )
+        {
+            return true;
+        }
+
+        return stop_plan.ego_s >= stop_plan.brake_start_s;
     }
 
     if( conflict.currently_overlaps_route_corridor &&
@@ -746,34 +755,89 @@ should_stop_for_active_conflict(
 }
 
 map::Route
-apply_active_avoidance_speed_limit(
+apply_active_avoidance_speed_profile(
     const map::Route& active_route,
     double ego_s,
+    double shift_start_s,
+    double shift_end_s,
+    double release_s,
+    const dynamics::PhysicalVehicleParameters& vehicle_params,
     const planner::ObstacleAvoidanceParams& params )
 {
-    map::Route limited_route = active_route;
+    map::Route profiled_route = active_route;
 
     if( params.max_speed_during_avoidance <= 0.0 ||
-        !std::isfinite( ego_s ) )
+        !std::isfinite( ego_s ) ||
+        !std::isfinite( shift_start_s ) )
     {
-        return limited_route;
+        return profiled_route;
     }
 
-    for( auto& route_point : limited_route.reference_line )
+    double maneuver_end_s =
+        std::isfinite( release_s )
+            ? release_s
+            : shift_end_s;
+    if( !std::isfinite( maneuver_end_s ) )
     {
-        auto& point = route_point.second;
-        point.max_speed =
-            std::min(
-                point.max_speed.value_or( std::numeric_limits<double>::infinity() ),
-                params.max_speed_during_avoidance );
+        maneuver_end_s = shift_start_s;
+    }
+    maneuver_end_s = std::max( maneuver_end_s, shift_start_s );
+
+    const double target_v = std::max( 0.0, params.max_speed_during_avoidance );
+    const double a_abs =
+        std::max( 0.1, std::fabs( vehicle_params.acceleration_min ) );
+    std::size_t approach_points = 0;
+    std::size_t capped_points = 0;
+
+    for( auto& [s, point] : profiled_route.reference_line )
+    {
+        if( s < ego_s )
+        {
+            continue;
+        }
+
+        if( s < shift_start_s )
+        {
+            const double distance_to_target = shift_start_s - s;
+            const double allowed_speed =
+                std::sqrt(
+                    target_v * target_v +
+                    2.0 * a_abs * std::max( 0.0, distance_to_target ) );
+            point.max_speed =
+                std::min(
+                    point.max_speed.value_or( std::numeric_limits<double>::infinity() ),
+                    allowed_speed );
+            ++approach_points;
+            continue;
+        }
+
+        if( s <= maneuver_end_s )
+        {
+            point.max_speed =
+                std::min(
+                    point.max_speed.value_or( std::numeric_limits<double>::infinity() ),
+                    target_v );
+            ++capped_points;
+        }
     }
 
     RCLCPP_INFO(
         rclcpp::get_logger( "Behaviors" ),
-        "[OA][SPEED_CAP] capped modified_route max_speed to %.2f",
-        params.max_speed_during_avoidance );
+        "[OA][SPEED_PROFILE] avoidance speed approach profile to shift_start_s ego_s=%.2f shift_start_s=%.2f target_v=%.2f a_abs=%.2f points=%zu",
+        ego_s,
+        shift_start_s,
+        target_v,
+        a_abs,
+        approach_points );
+    RCLCPP_INFO(
+        rclcpp::get_logger( "Behaviors" ),
+        "[OA][SPEED_PROFILE] avoidance speed cap inside maneuver shift_start_s=%.2f maneuver_end_s=%.2f max_speed=%.2f points=%zu",
+        shift_start_s,
+        maneuver_end_s,
+        target_v,
+        capped_points );
 
-    return limited_route;
+    return profiled_route;
 }
 
 class PreviousTrajectoryFallbackGuard
@@ -798,6 +862,57 @@ private:
     planner::TrajectoryPlanner& planner_;
     bool previous_;
 };
+
+void
+set_route_points_from_s_to_zero( map::Route& route, double ego_s )
+{
+    if( route.reference_line.empty() )
+    {
+        return;
+    }
+
+    if( !std::isfinite( ego_s ) )
+    {
+        ego_s = route.reference_line.begin()->first;
+    }
+
+    for( auto& [s, point] : route.reference_line )
+    {
+        if( s >= ego_s )
+        {
+            point.max_speed = 0.0;
+        }
+    }
+}
+
+map::Route
+make_max_braking_route_from_s( const map::Route& route, double ego_s )
+{
+    map::Route max_braking_route = route;
+    set_route_points_from_s_to_zero( max_braking_route, ego_s );
+    return max_braking_route;
+}
+
+void
+insert_zero_speed_stop_point( map::Route& route, double stop_s )
+{
+    if( route.reference_line.empty() || !std::isfinite( stop_s ) )
+    {
+        return;
+    }
+
+    const double first_s = route.reference_line.begin()->first;
+    const double last_s = route.reference_line.rbegin()->first;
+    if( stop_s < first_s || stop_s > last_s )
+    {
+        return;
+    }
+
+    auto stop_point = route.interpolate_at_s<map::MapPoint>( stop_s );
+    stop_point.s = stop_s;
+    stop_point.max_speed = 0.0;
+    route.reference_line[stop_s] = stop_point;
+}
 
 map::Route
 make_stop_route_on_active_route(
@@ -835,28 +950,50 @@ make_stop_route_on_active_route(
         std::max( 0.1, std::fabs( vehicle_params.acceleration_min ) );
     const double v0 = std::max( 0.0, ego.vx );
     const double braking_distance = v0 * v0 / ( 2.0 * a_abs );
+    const double safety_margin =
+        std::max( 0.0, params.modified_route_braking_safety_margin ) +
+        std::max( 0.0, params.min_valid_stop_margin );
+    const double close_stop_hold_margin =
+        std::max( 0.25, std::min( 1.0, std::max( 0.0, params.min_valid_stop_margin ) ) );
+    const double reachability_margin =
+        v0 > 0.5
+            ? safety_margin
+            : close_stop_hold_margin;
     double target_stop_s = requested_stop_s;
 
     if( !std::isfinite( target_stop_s ) ||
         target_stop_s <= ego_s ||
-        target_stop_s - ego_s < braking_distance )
+        target_stop_s - ego_s < braking_distance + reachability_margin )
     {
-        target_stop_s = ego_s + braking_distance;
         RCLCPP_WARN(
             rclcpp::get_logger( "Behaviors" ),
-            "[OA][STOP_ROUTE] requested stop unreachable; braking on active route instead" );
+            "[OA][STOP_ROUTE] requested stop unreachable; applying maximum route-based braking active_route=%s ego_s=%.2f requested_stop_s=%.2f v=%.2f braking_distance=%.2f safety_margin=%.2f reachability_margin=%.2f reason=%s",
+            active_route_name.c_str(),
+            ego_s,
+            requested_stop_s,
+            v0,
+            braking_distance,
+            safety_margin,
+            reachability_margin,
+            reason.c_str() );
+        set_route_points_from_s_to_zero( stop_route, ego_s );
+        return stop_route;
     }
 
     RCLCPP_INFO(
         rclcpp::get_logger( "Behaviors" ),
-        "[OA][STOP_ROUTE] building speed-profile stop route active_route=%s ego_s=%.2f requested_stop_s=%.2f target_stop_s=%.2f v=%.2f braking_distance=%.2f reason=%s",
+        "[OA][STOP_ROUTE] building reachable stop profile active_route=%s ego_s=%.2f requested_stop_s=%.2f target_stop_s=%.2f v=%.2f braking_distance=%.2f safety_margin=%.2f reachability_margin=%.2f reason=%s",
         active_route_name.c_str(),
         ego_s,
         requested_stop_s,
         target_stop_s,
         v0,
         braking_distance,
+        safety_margin,
+        reachability_margin,
         reason.c_str() );
+
+    insert_zero_speed_stop_point( stop_route, target_stop_s );
 
     for( auto& [s, point] : stop_route.reference_line )
     {
@@ -878,14 +1015,6 @@ make_stop_route_on_active_route(
                 std::min(
                     point.max_speed.value_or( std::numeric_limits<double>::infinity() ),
                     allowed_speed );
-        }
-
-        if( params.max_speed_during_avoidance > 0.0 )
-        {
-            point.max_speed =
-                std::min(
-                    point.max_speed.value_or( std::numeric_limits<double>::infinity() ),
-                    params.max_speed_during_avoidance );
         }
     }
 
@@ -928,7 +1057,8 @@ make_stop_on_route_behavior(
     const dynamics::TrafficParticipantSet& traffic_participants,
     const planner::ObstacleAvoidanceParams& params,
     const std::string& reason,
-    const std::string& active_route_name )
+    const std::string& active_route_name,
+    map::Route* accepted_stop_route = nullptr )
 {
     auto stop_route =
         make_stop_route_on_active_route(
@@ -954,8 +1084,80 @@ make_stop_on_route_behavior(
     {
         RCLCPP_ERROR(
             rclcpp::get_logger( "Behaviors" ),
-            "[OA][STOP_ROUTE] planner exception on route-only stop; publishing stop route without free-space fallback: %s",
+            "[OA][STOP_ROUTE] planner exception on route-only stop: %s",
             e.what() );
+    }
+
+    if( trajectory.states.empty() )
+    {
+        RCLCPP_ERROR(
+            rclcpp::get_logger( "Behaviors" ),
+            "[OA][STOP_ROUTE] invalid stop trajectory; retrying with maximum route-based braking active_route=%s reason=%s",
+            active_route_name.c_str(),
+            reason.c_str() );
+
+        double ego_s =
+            project_s_on_reference_line(
+                active_route,
+                ego,
+                std::numeric_limits<double>::quiet_NaN() );
+        if( !std::isfinite( ego_s ) && !active_route.reference_line.empty() )
+        {
+            ego_s = active_route.reference_line.begin()->first;
+        }
+
+        auto max_braking_route =
+            make_max_braking_route_from_s( active_route, ego_s );
+
+        try
+        {
+            PreviousTrajectoryFallbackGuard fallback_guard( planner );
+            trajectory =
+                planner.plan_route_trajectory(
+                    max_braking_route,
+                    ego,
+                    traffic_participants );
+        }
+        catch( const std::exception& e )
+        {
+            RCLCPP_ERROR(
+                rclcpp::get_logger( "Behaviors" ),
+                "[OA][STOP_ROUTE] planner exception on maximum route-based braking: %s",
+                e.what() );
+        }
+
+        if( !trajectory.states.empty() )
+        {
+            RCLCPP_INFO(
+                rclcpp::get_logger( "Behaviors" ),
+                "[OA][STOP_ROUTE] maximum route-based braking trajectory accepted active_route=%s ego_s=%.2f",
+                active_route_name.c_str(),
+                ego_s );
+            trajectory.adjust_start_time( ego.time );
+            trajectory.label =
+                "obstacle avoidance: maximum route-based braking on active " +
+                active_route_name + "_route";
+
+            Behavior behavior;
+            behavior.trajectory = dynamics::conversions::to_ros_msg( trajectory );
+            behavior.modified_route = map::conversions::to_ros_msg( max_braking_route );
+            if( accepted_stop_route != nullptr )
+            {
+                *accepted_stop_route = max_braking_route;
+            }
+            return behavior;
+        }
+
+        RCLCPP_ERROR(
+            rclcpp::get_logger( "Behaviors" ),
+            "[OA][STOP_ROUTE] maximum route-based braking failed; using last-resort emergency hold active_route=%s reason=%s",
+            active_route_name.c_str(),
+            reason.c_str() );
+        return make_emergency_hold_behavior(
+            active_route,
+            ego,
+            params,
+            "maximum route-based braking failed: " + reason );
     }
 
     trajectory.adjust_start_time( ego.time );
@@ -964,6 +1166,10 @@ make_stop_on_route_behavior(
     Behavior behavior;
     behavior.trajectory = dynamics::conversions::to_ros_msg( trajectory );
     behavior.modified_route = map::conversions::to_ros_msg( stop_route );
+    if( accepted_stop_route != nullptr )
+    {
+        *accepted_stop_route = stop_route;
+    }
     return behavior;
 }
 
@@ -975,7 +1181,8 @@ make_stop_on_active_route_behavior(
     const dynamics::VehicleStateDynamic& ego,
     const dynamics::TrafficParticipantSet& traffic_participants,
     const planner::ObstacleAvoidanceParams& params,
-    const std::string& active_route_name )
+    const std::string& active_route_name,
+    map::Route* accepted_stop_route = nullptr )
 {
     const auto vehicle_params = planner.get_physical_vehicle_parameters();
     const auto stop_plan =
@@ -988,7 +1195,25 @@ make_stop_on_active_route_behavior(
     const double requested_stop_s =
         std::isfinite( stop_plan.stop_s )
             ? stop_plan.stop_s
-            : conflict.object_s_min - std::max( 0.0, params.stop_before_obstacle );
+            : conflict.object_s_min -
+              std::max( 0.0, params.stop_before_obstacle ) -
+              ( vehicle_params.wheelbase + vehicle_params.front_axle_to_front_border );
+    const double v0 = std::max( 0.0, ego.vx );
+    const double safety_margin =
+        std::max( 0.0, params.modified_route_braking_safety_margin ) +
+        std::max( 0.0, params.min_valid_stop_margin );
+    const double close_stop_hold_margin =
+        std::max( 0.25, std::min( 1.0, std::max( 0.0, params.min_valid_stop_margin ) ) );
+    const double reachability_margin =
+        v0 > 0.5
+            ? safety_margin
+            : close_stop_hold_margin;
+    const bool requested_stop_reachable =
+        std::isfinite( stop_plan.ego_s ) &&
+        std::isfinite( requested_stop_s ) &&
+        requested_stop_s > stop_plan.ego_s &&
+        requested_stop_s - stop_plan.ego_s >=
+            stop_plan.required_braking_distance + reachability_margin;
 
     map::Route stop_route =
         make_stop_route_on_active_route(
@@ -1030,7 +1255,7 @@ make_stop_on_active_route_behavior(
     {
         RCLCPP_ERROR(
             rclcpp::get_logger( "Behaviors" ),
-            "[OA][STOP_ROUTE] planner exception on OA stop route; returning strongest route speed reduction: %s",
+            "[OA][STOP_ROUTE] planner exception on OA stop route: %s",
             e.what() );
     }
 
@@ -1042,13 +1267,109 @@ make_stop_on_active_route_behavior(
             vehicle_params,
             params ) )
     {
-        RCLCPP_WARN(
+        RCLCPP_ERROR(
             rclcpp::get_logger( "Behaviors" ),
-            "[OA][STOP_ROUTE] planner did not produce a validated stop trajectory; publishing stop route without free-space fallback" );
+            "[OA][STOP_ROUTE] invalid stop trajectory; retrying with maximum route-based braking active_route=%s id=%d",
+            active_route_name.c_str(),
+            conflict.participant_id );
+
+        if( requested_stop_reachable )
+        {
+            RCLCPP_ERROR(
+                rclcpp::get_logger( "Behaviors" ),
+                "[OA][STOP_ROUTE] reachable stop profile was invalid; holding instead of moving stop point to ego active_route=%s id=%d",
+                active_route_name.c_str(),
+                conflict.participant_id );
+            return make_emergency_hold_behavior(
+                active_route,
+                ego,
+                params,
+                "reachable stop profile invalid on active " + active_route_name + "_route" );
+        }
+
+        double ego_s = stop_plan.ego_s;
+        if( !std::isfinite( ego_s ) )
+        {
+            ego_s =
+                project_s_on_reference_line(
+                    active_route,
+                    ego,
+                    requested_stop_s );
+        }
+        if( !std::isfinite( ego_s ) && !active_route.reference_line.empty() )
+        {
+            ego_s = active_route.reference_line.begin()->first;
+        }
+
+        auto max_braking_route =
+            make_max_braking_route_from_s( active_route, ego_s );
+
+        try
+        {
+            PreviousTrajectoryFallbackGuard fallback_guard( planner );
+            trajectory =
+                planner.plan_route_trajectory(
+                    max_braking_route,
+                    ego,
+                    traffic_participants );
+        }
+        catch( const std::exception& e )
+        {
+            RCLCPP_ERROR(
+                rclcpp::get_logger( "Behaviors" ),
+                "[OA][STOP_ROUTE] planner exception on maximum route-based braking: %s",
+                e.what() );
+        }
+
+        if( !trajectory.states.empty() &&
+            ::adore::planner::trajectory_stops_before_conflict(
+                trajectory,
+                max_braking_route,
+                conflict,
+                vehicle_params,
+                params ) )
+        {
+            RCLCPP_INFO(
+                rclcpp::get_logger( "Behaviors" ),
+                "[OA][STOP_ROUTE] maximum route-based braking trajectory accepted active_route=%s ego_s=%.2f id=%d",
+                active_route_name.c_str(),
+                ego_s,
+                conflict.participant_id );
+            trajectory.adjust_start_time( ego.time );
+            trajectory.label =
+                "obstacle avoidance: maximum route-based braking on active " +
+                active_route_name + "_route";
+
+            if( accepted_stop_route != nullptr )
+            {
+                *accepted_stop_route = max_braking_route;
+            }
+
+            Behavior behavior;
+            behavior.trajectory = dynamics::conversions::to_ros_msg( trajectory );
+            behavior.modified_route = map::conversions::to_ros_msg( max_braking_route );
+            return behavior;
+        }
+
+        RCLCPP_ERROR(
+            rclcpp::get_logger( "Behaviors" ),
+            "[OA][STOP_ROUTE] maximum route-based braking failed or did not stop before conflict; using last-resort emergency hold active_route=%s id=%d",
+            active_route_name.c_str(),
+            conflict.participant_id );
+        return make_emergency_hold_behavior(
+            active_route,
+            ego,
+            params,
+            "maximum route-based braking failed on active " + active_route_name + "_route" );
     }
 
     trajectory.adjust_start_time( ego.time );
     trajectory.label = "obstacle avoidance: stop on active " + active_route_name + "_route";
+
+    if( accepted_stop_route != nullptr )
+    {
+        *accepted_stop_route = stop_route;
+    }
 
     Behavior behavior;
     behavior.trajectory = dynamics::conversions::to_ros_msg( trajectory );
@@ -1142,43 +1463,43 @@ make_stop_on_active_route_behavior(
                 auto make_active_stop_behavior =
                     [&]( const std::string& label ) -> Behavior
                     {
-                        auto stop_route =
-                            make_stop_route_on_active_route(
+                        map::Route accepted_stop_route;
+                        auto behavior =
+                            make_stop_on_route_behavior(
+                                planner,
                                 active_route,
                                 vehicle_state_dynamic,
-                                std::numeric_limits<double>::quiet_NaN(),
-                                planner.get_physical_vehicle_parameters(),
+                                traffic_participants,
                                 params_for_obstacle_avoidance,
                                 label,
-                                "modified" );
-                        dynamics::Trajectory trajectory;
-                        try
+                                "modified",
+                                &accepted_stop_route );
+                        if( !accepted_stop_route.reference_line.empty() )
                         {
-                            PreviousTrajectoryFallbackGuard fallback_guard( planner );
-                            trajectory =
-                                planner.plan_route_trajectory(
-                                    stop_route,
-                                    vehicle_state_dynamic,
-                                    traffic_participants );
+                            active_avoidance_state.modified_route = accepted_stop_route;
                         }
-                        catch( const std::exception& e )
+                        return behavior;
+                    };
+
+                auto make_active_conflict_stop_behavior =
+                    [&]( const ::adore::planner::RouteCorridorConflict& conflict ) -> Behavior
+                    {
+                        map::Route accepted_stop_route;
+                        auto behavior =
+                            make_stop_on_active_route_behavior(
+                                planner,
+                                active_route,
+                                conflict,
+                                vehicle_state_dynamic,
+                                traffic_participants,
+                                params_for_obstacle_avoidance,
+                                "modified",
+                                &accepted_stop_route );
+                        if( !accepted_stop_route.reference_line.empty() )
                         {
-                            RCLCPP_ERROR(
-                                rclcpp::get_logger( "Behaviors" ),
-                                "[OA][STOP_ROUTE] planner exception on active stop route; publishing stop route without free-space fallback: %s",
-                                e.what() );
+                            active_avoidance_state.modified_route = accepted_stop_route;
                         }
-
-                        trajectory.adjust_start_time( vehicle_state_dynamic.time );
-                        trajectory.label = label;
-
-                        Behavior trajectory_and_signal;
-                        trajectory_and_signal.trajectory =
-                            dynamics::conversions::to_ros_msg( trajectory );
-                        trajectory_and_signal.modified_route =
-                            map::conversions::to_ros_msg( stop_route );
-
-                        return trajectory_and_signal;
+                        return behavior;
                     };
 
                 if( active_avoidance_state.maneuver.active &&
@@ -1225,14 +1546,7 @@ make_stop_on_active_route_behavior(
                             rclcpp::get_logger( "Behaviors" ),
                             "[OA][ACTIVE_STATE] active replanning disabled during active maneuver; using route-based stop policy" );
 
-                        return make_stop_on_active_route_behavior(
-                            planner,
-                            active_route,
-                            monitor_conflict,
-                            vehicle_state_dynamic,
-                            traffic_participants,
-                            params_for_obstacle_avoidance,
-                            "modified" );
+                        return make_active_conflict_stop_behavior( monitor_conflict );
                     }
 
                     if( !monitor_result.safe_to_continue )
@@ -1264,14 +1578,7 @@ make_stop_on_active_route_behavior(
                         monitor_conflict.ttc_source = "opposite_lane_monitor_committed";
                         monitor_conflict.reason = monitor_result.reason;
 
-                        return make_stop_on_active_route_behavior(
-                            planner,
-                            active_route,
-                            monitor_conflict,
-                            vehicle_state_dynamic,
-                            traffic_participants,
-                            params_for_obstacle_avoidance,
-                            "modified" );
+                        return make_active_conflict_stop_behavior( monitor_conflict );
                     }
                 }
 
@@ -1392,6 +1699,23 @@ make_stop_on_active_route_behavior(
                     active_conflict.reset();
                 }
 
+                if( active_conflict.has_value() &&
+                    active_conflict->object_class ==
+                        ::adore::planner::RouteCorridorObjectClass::StaticOrSlow &&
+                    std::isfinite( active_conflict->object_s_max ) &&
+                    std::isfinite( ego_s_modified ) &&
+                    active_conflict->object_s_max < ego_s_modified - 0.25 &&
+                    !active_conflict->currently_overlaps_ego_footprint )
+                {
+                    RCLCPP_INFO(
+                        rclcpp::get_logger( "Behaviors" ),
+                        "[OA][ACTIVE_ROUTE] ignoring static_or_slow conflict behind ego id=%d object_s_max=%.2f ego_s=%.2f",
+                        active_conflict->participant_id,
+                        active_conflict->object_s_max,
+                        ego_s_modified );
+                    active_conflict.reset();
+                }
+
                 if( active_conflict.has_value() )
                 {
                     // A real conflict on the active route can be a newly visible
@@ -1458,11 +1782,21 @@ make_stop_on_active_route_behavior(
                                 replan_ego_s );
                         }
 
+                        auto replan_route_for_planning =
+                            apply_active_avoidance_speed_profile(
+                                replan_result.modified_route,
+                                replan_ego_s,
+                                replan_result.shift_start_s,
+                                replan_result.shift_end_s,
+                                replan_result.maneuver.release_s,
+                                planner.get_physical_vehicle_parameters(),
+                                params_for_obstacle_avoidance );
+
                         try
                         {
                             trajectory =
                                 planner.plan_route_trajectory_from_s(
-                                    replan_result.modified_route,
+                                    replan_route_for_planning,
                                     vehicle_state_dynamic,
                                     traffic_participants,
                                     replan_ego_s );
@@ -1492,6 +1826,8 @@ make_stop_on_active_route_behavior(
                             vehicle_state_dynamic,
                             params_for_obstacle_avoidance,
                             true );
+                        active_avoidance_state.modified_route =
+                            replan_route_for_planning;
 
                         trajectory.adjust_start_time( vehicle_state_dynamic.time );
                         trajectory.label =
@@ -1506,7 +1842,7 @@ make_stop_on_active_route_behavior(
                             dynamics::conversions::to_ros_msg( trajectory );
                         trajectory_and_signal.modified_route =
                             map::conversions::to_ros_msg(
-                                replan_result.modified_route );
+                                replan_route_for_planning );
 
                         RCLCPP_INFO(
                             rclcpp::get_logger( "Behaviors" ),
@@ -1593,14 +1929,7 @@ make_stop_on_active_route_behavior(
                             rclcpp::get_logger( "Behaviors" ),
                             "[OA][ACTIVE_STATE] using route-based stop policy after dynamic replan check" );
 
-                        return make_stop_on_active_route_behavior(
-                            planner,
-                            active_route,
-                            active_conflict.value(),
-                            vehicle_state_dynamic,
-                            traffic_participants,
-                            params_for_obstacle_avoidance,
-                            "modified" );
+                        return make_active_conflict_stop_behavior( active_conflict.value() );
                     }
                 }
 
@@ -1699,9 +2028,13 @@ make_stop_on_active_route_behavior(
                 {
                     dynamics::Trajectory trajectory;
                     auto active_route_for_planning =
-                        apply_active_avoidance_speed_limit(
+                        apply_active_avoidance_speed_profile(
                             active_route,
                             ego_s_modified,
+                            active_avoidance_state.shift_start_s,
+                            active_avoidance_state.shift_end_s,
+                            active_avoidance_state.release_s,
+                            planner.get_physical_vehicle_parameters(),
                             params_for_obstacle_avoidance );
 
                     if( use_weather_comfort_settings )
@@ -1818,14 +2151,7 @@ make_stop_on_active_route_behavior(
                                 rclcpp::get_logger( "Behaviors" ),
                                 "[OA][ACTIVE_STATE] active replanning disabled during active maneuver; using route-based stop policy" );
 
-                            return make_stop_on_active_route_behavior(
-                                planner,
-                                active_route,
-                                monitor_conflict,
-                                vehicle_state_dynamic,
-                                traffic_participants,
-                                params_for_obstacle_avoidance,
-                                "modified" );
+                            return make_active_conflict_stop_behavior( monitor_conflict );
                         }
 
                         if( !planned_monitor_result.safe_to_continue )
@@ -1857,14 +2183,7 @@ make_stop_on_active_route_behavior(
                             monitor_conflict.ttc_source = "planned_opposite_lane_monitor_committed";
                             monitor_conflict.reason = planned_monitor_result.reason;
 
-                            return make_stop_on_active_route_behavior(
-                                planner,
-                                active_route,
-                                monitor_conflict,
-                                vehicle_state_dynamic,
-                                traffic_participants,
-                                params_for_obstacle_avoidance,
-                                "modified" );
+                            return make_active_conflict_stop_behavior( monitor_conflict );
                         }
                     }
 
@@ -1952,6 +2271,20 @@ make_stop_on_active_route_behavior(
                     ego_lane_oncoming_result.reason.c_str() );
 
                 auto trajectory = ego_lane_oncoming_result.trajectory;
+                if( trajectory.states.empty() )
+                {
+                    RCLCPP_ERROR(
+                        rclcpp::get_logger( "Behaviors" ),
+                        "[OA][STOP_ROUTE] ego-lane oncoming stop returned empty trajectory; retrying route-based stop" );
+                    return make_stop_on_route_behavior(
+                        planner,
+                        route_with_signal,
+                        vehicle_state_dynamic,
+                        traffic_participants,
+                        params_for_obstacle_avoidance,
+                        "ego-lane oncoming stop trajectory empty",
+                        "original" );
+                }
                 trajectory.adjust_start_time( vehicle_state_dynamic.time );
 
                 Behavior trajectory_and_signal;
@@ -1985,13 +2318,31 @@ make_stop_on_active_route_behavior(
                 {
                     RCLCPP_ERROR(
                         rclcpp::get_logger( "Behaviors" ),
-                        "[OA][STOP_ROUTE] weather planner exception; using legacy hold behavior: %s",
+                        "[OA][STOP_ROUTE] weather planner exception; retrying route-based stop: %s",
                         e.what() );
-                    return make_emergency_hold_behavior(
+                    return make_stop_on_route_behavior(
+                        planner,
                         route_with_signal,
                         vehicle_state_dynamic,
+                        traffic_participants,
                         params_for_obstacle_avoidance,
-                        "weather route planner exception" );
+                        "weather route planner exception",
+                        "original" );
+                }
+
+                if( trajectory.states.empty() )
+                {
+                    RCLCPP_ERROR(
+                        rclcpp::get_logger( "Behaviors" ),
+                        "[OA][STOP_ROUTE] weather planner returned empty trajectory; retrying route-based stop" );
+                    return make_stop_on_route_behavior(
+                        planner,
+                        route_with_signal,
+                        vehicle_state_dynamic,
+                        traffic_participants,
+                        params_for_obstacle_avoidance,
+                        "weather route planner returned empty trajectory",
+                        "original" );
                 }
 
                 trajectory.adjust_start_time( vehicle_state_dynamic.time );
@@ -2057,13 +2408,31 @@ make_stop_on_active_route_behavior(
                 {
                     RCLCPP_ERROR(
                         rclcpp::get_logger( "Behaviors" ),
-                        "[OA][STOP_ROUTE] planner exception in OA-disabled mode; using emergency hold: %s",
+                        "[OA][STOP_ROUTE] planner exception in OA-disabled mode; retrying route-based stop: %s",
                         e.what() );
-                    return make_emergency_hold_behavior(
+                    return make_stop_on_route_behavior(
+                        planner,
                         route_with_signal,
                         vehicle_state_dynamic,
+                        traffic_participants,
                         params_for_obstacle_avoidance,
-                        "driving mission (planner exception with OA disabled)" );
+                        "driving mission (planner exception with OA disabled)",
+                        "original" );
+                }
+
+                if( trajectory.states.empty() )
+                {
+                    RCLCPP_ERROR(
+                        rclcpp::get_logger( "Behaviors" ),
+                        "[OA][STOP_ROUTE] OA-disabled route planner returned empty trajectory; retrying route-based stop" );
+                    return make_stop_on_route_behavior(
+                        planner,
+                        route_with_signal,
+                        vehicle_state_dynamic,
+                        traffic_participants,
+                        params_for_obstacle_avoidance,
+                        "OA-disabled route planner returned empty trajectory",
+                        "original" );
                 }
 
                 trajectory.adjust_start_time( vehicle_state_dynamic.time );
@@ -2134,47 +2503,44 @@ make_stop_on_active_route_behavior(
                         static_cast<int>( oa_result.mode ),
                         oa_result.reason.c_str() );
 
-                    const double requested_stop_s =
-                        oa_result.obstacle_s_min -
-                        std::max( 0.0, params_for_obstacle_avoidance.stop_before_obstacle );
-                    auto stop_route =
-                        make_stop_route_on_active_route(
-                            route_with_signal,
-                            vehicle_state_dynamic,
-                            requested_stop_s,
-                            planner.get_physical_vehicle_parameters(),
-                            params_for_obstacle_avoidance,
-                            oa_result.reason,
-                            "original" );
-
-                    dynamics::Trajectory trajectory;
-                    try
-                    {
-                        PreviousTrajectoryFallbackGuard fallback_guard( planner );
-                        trajectory =
-                            planner.plan_route_trajectory(
-                                stop_route,
-                                vehicle_state_dynamic,
-                                traffic_participants );
-                    }
-                    catch( const std::exception& e )
+                    ::adore::planner::RouteCorridorConflict stop_conflict;
+                    stop_conflict.participant_id = oa_result.obstacle_id;
+                    stop_conflict.object_class =
+                        ::adore::planner::RouteCorridorObjectClass::StaticOrSlow;
+                    stop_conflict.object_s_min = oa_result.obstacle_s_min;
+                    stop_conflict.object_s_max = oa_result.obstacle_s_max;
+                    if( !std::isfinite( stop_conflict.object_s_min ) )
                     {
                         RCLCPP_ERROR(
                             rclcpp::get_logger( "Behaviors" ),
-                            "[OA][STOP_ROUTE] planner exception on original-route OA stop; publishing stop route without free-space fallback: %s",
-                            e.what() );
+                            "[OA][STOP_ROUTE] OA stop result has no finite obstacle_s_min; using last-resort route stop behavior reason=%s",
+                            oa_result.reason.c_str() );
+                        return make_stop_on_route_behavior(
+                            planner,
+                            route_with_signal,
+                            vehicle_state_dynamic,
+                            traffic_participants,
+                            params_for_obstacle_avoidance,
+                            "OA stop result missing obstacle_s_min",
+                            "original" );
                     }
+                    stop_conflict.distance_s =
+                        std::max(
+                            0.0,
+                            oa_result.obstacle_s_min -
+                            route_with_signal.get_s( vehicle_state_dynamic ) );
+                    stop_conflict.currently_overlaps_route_corridor = true;
+                    stop_conflict.requires_stop = true;
+                    stop_conflict.reason = oa_result.reason;
 
-                    trajectory.adjust_start_time( vehicle_state_dynamic.time );
-                    trajectory.label = oa_result.reason;
-
-                    Behavior trajectory_and_signal;
-                    trajectory_and_signal.trajectory =
-                        dynamics::conversions::to_ros_msg( trajectory );
-                    trajectory_and_signal.modified_route =
-                        map::conversions::to_ros_msg( stop_route );
-
-                    return trajectory_and_signal;
+                    return make_stop_on_active_route_behavior(
+                        planner,
+                        route_with_signal,
+                        stop_conflict,
+                        vehicle_state_dynamic,
+                        traffic_participants,
+                        params_for_obstacle_avoidance,
+                        "original" );
                 }
 
                 dynamics::Trajectory trajectory;
@@ -2196,11 +2562,23 @@ make_stop_on_active_route_behavior(
                         ego_s_modified );
                 }
 
+                auto modified_route_for_planning =
+                    apply_active_avoidance_speed_profile(
+                        oa_result.modified_route,
+                        ego_s_modified,
+                        oa_result.shift_start_s,
+                        oa_result.shift_end_s,
+                        oa_result.maneuver.release_s,
+                        planner.get_physical_vehicle_parameters(),
+                        params_for_obstacle_avoidance );
+                active_avoidance_state.modified_route =
+                    modified_route_for_planning;
+
                 try
                 {
                     trajectory =
                         planner.plan_route_trajectory_from_s(
-                            oa_result.modified_route,
+                            modified_route_for_planning,
                             vehicle_state_dynamic,
                             traffic_participants,
                             ego_s_modified );
@@ -2249,9 +2627,23 @@ make_stop_on_active_route_behavior(
                     dynamics::conversions::to_ros_msg( trajectory );
 
                 trajectory_and_signal.modified_route =
-                    map::conversions::to_ros_msg( oa_result.modified_route );
+                    map::conversions::to_ros_msg( modified_route_for_planning );
 
                 return trajectory_and_signal;
+            }
+
+            if( oa_result.mode != ::adore::planner::ObstacleAvoidanceMode::None )
+            {
+                RCLCPP_ERROR(
+                    rclcpp::get_logger( "Behaviors" ),
+                    "[OA][FAIL_SAFE] OA returned mode=%d but no valid trajectory; holding instead of normal driving reason=%s",
+                    static_cast<int>( oa_result.mode ),
+                    oa_result.reason.c_str() );
+                return make_emergency_hold_behavior(
+                    route_with_signal,
+                    vehicle_state_dynamic,
+                    params_for_obstacle_avoidance,
+                    "OA failed after detecting an obstacle: " + oa_result.reason );
             }
 
             // -------------------------------------------------------------------------
@@ -2270,13 +2662,31 @@ make_stop_on_active_route_behavior(
             {
                 RCLCPP_ERROR(
                     rclcpp::get_logger( "Behaviors" ),
-                    "[OA][STOP_ROUTE] route planner exception; using legacy hold behavior: %s",
+                    "[OA][STOP_ROUTE] route planner exception; retrying route-based stop: %s",
                     e.what() );
-                return make_emergency_hold_behavior(
+                return make_stop_on_route_behavior(
+                    planner,
                     route_with_signal,
                     vehicle_state_dynamic,
+                    traffic_participants,
                     params_for_obstacle_avoidance,
-                    "route planner exception" );
+                    "route planner exception",
+                    "original" );
+            }
+
+            if( trajectory.states.empty() )
+            {
+                RCLCPP_ERROR(
+                    rclcpp::get_logger( "Behaviors" ),
+                    "[OA][STOP_ROUTE] route planner returned empty trajectory; retrying route-based stop" );
+                return make_stop_on_route_behavior(
+                    planner,
+                    route_with_signal,
+                    vehicle_state_dynamic,
+                    traffic_participants,
+                    params_for_obstacle_avoidance,
+                    "route planner returned empty trajectory",
+                    "original" );
             }
 
             trajectory.adjust_start_time( vehicle_state_dynamic.time );
