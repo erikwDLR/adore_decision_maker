@@ -14,7 +14,7 @@
     obstacle_avoidance.ego_corridor_safety_margin: 0.2
 
     # Real lateral object clearance
-    obstacle_avoidance.side_clearance: 0.5
+    obstacle_avoidance.side_clearance: 0.8
 
     # Longitudinal maneuver geometry
     obstacle_avoidance.front_clearance: 7.0
@@ -138,3 +138,15 @@
     obstacle_avoidance.ghost_obstacle_match_l_margin: 1.0
     obstacle_avoidance.ghost_obstacle_max_lifetime: 10.0
     obstacle_avoidance.ghost_dynamic_max_missing_cycles: 5
+
+    # --------------------------------------------------------------------------
+    # Trajectory, geometry, and scoring parameters
+    # --------------------------------------------------------------------------
+
+    obstacle_avoidance.min_vehicle_dimension: 0.1
+    obstacle_avoidance.route_window_min: 20.0
+    obstacle_avoidance.trajectory_step_size: 0.05
+    obstacle_avoidance.min_motion_speed: 0.05
+    obstacle_avoidance.stop_adjustment_offset: 2.0
+    obstacle_avoidance.lateral_shift_penalty_score: 20.0
+    obstacle_avoidance.opposite_lane_penalty_score: 40.0

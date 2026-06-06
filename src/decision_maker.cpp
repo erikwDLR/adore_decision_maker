@@ -23,6 +23,45 @@
 namespace adore
 {
 
+namespace
+{
+
+double
+required_traffic_participant_lookahead(
+  const planner::ObstacleAvoidanceParams& params )
+{
+  const double static_object_horizon =
+    std::max( 0.0, params.max_object_ahead );
+  const double ego_lane_oncoming_horizon =
+    params.ego_lane_oncoming_stop_enabled
+      ? std::max( 0.0, params.ego_lane_oncoming_max_distance )
+      : 0.0;
+  const double modified_route_horizon =
+    params.modified_route_safety_check_enabled
+      ? std::max( 0.0, params.modified_route_max_check_distance )
+      : 0.0;
+  const double prediction_distance_horizon =
+    std::max( 0.0, params.prediction_time_horizon ) *
+    std::max(
+      std::max( 0.0, params.min_oncoming_speed_for_gap_check ),
+      std::max( 0.0, params.min_oncoming_route_speed ) );
+  const double grouping_horizon =
+    std::max(
+      std::max( 0.0, params.cluster_hold_gap_s ),
+      std::max( 0.0, params.shift_hull_gap_s ) ) +
+    std::max( 0.0, params.front_clearance ) +
+    std::max( 0.0, params.rear_clearance );
+
+  return std::max(
+    { static_object_horizon,
+      ego_lane_oncoming_horizon,
+      modified_route_horizon,
+      prediction_distance_horizon,
+      static_object_horizon + grouping_horizon } );
+}
+
+} // namespace
+
 adore::planner::ObstacleAvoidanceParams
 load_obstacle_avoidance_params( rclcpp::Node& node )
 {
@@ -96,10 +135,20 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
   params.ghost_obstacle_max_lifetime = node.declare_parameter<double>( "obstacle_avoidance.ghost_obstacle_max_lifetime", params.ghost_obstacle_max_lifetime );
   params.ghost_dynamic_max_missing_cycles = node.declare_parameter<int>( "obstacle_avoidance.ghost_dynamic_max_missing_cycles", params.ghost_dynamic_max_missing_cycles );
 
+  // Trajectory and geometry parameters
+  params.min_vehicle_dimension = node.declare_parameter<double>( "obstacle_avoidance.min_vehicle_dimension", params.min_vehicle_dimension );
+  params.route_window_min = node.declare_parameter<double>( "obstacle_avoidance.route_window_min", params.route_window_min );
+  params.trajectory_step_size = node.declare_parameter<double>( "obstacle_avoidance.trajectory_step_size", params.trajectory_step_size );
+  params.min_motion_speed = node.declare_parameter<double>( "obstacle_avoidance.min_motion_speed", params.min_motion_speed );
+  params.stop_adjustment_offset = node.declare_parameter<double>( "obstacle_avoidance.stop_adjustment_offset", params.stop_adjustment_offset );
+  params.lateral_shift_penalty_score = node.declare_parameter<double>( "obstacle_avoidance.lateral_shift_penalty_score", params.lateral_shift_penalty_score );
+  params.opposite_lane_penalty_score = node.declare_parameter<double>( "obstacle_avoidance.opposite_lane_penalty_score", params.opposite_lane_penalty_score );
+
   if( params.stop_before_obstacle <= params.front_clearance )
   {
     const double old_stop_before_obstacle = params.stop_before_obstacle;
-    params.stop_before_obstacle = params.front_clearance + 2.0;
+    params.stop_before_obstacle =
+      params.front_clearance + std::max( 0.0, params.stop_adjustment_offset );
     RCLCPP_WARN(
       node.get_logger(),
       "[OA][CONFIG] stop_before_obstacle must be greater than front_clearance; adjusted from %.3f to %.3f",
@@ -197,7 +246,8 @@ void DecisionMaker::setup_subscribers()
                                       {  
                                         auto participants = dynamics::conversions::to_cpp_type(msg);
                                         const double max_distance =
-                                          std::max( 0.0, obstacle_avoidance_params.max_object_ahead );
+                                          required_traffic_participant_lookahead(
+                                            obstacle_avoidance_params );
 
                                         if( latest_vehicle_state_dynamic.has_value() )
                                         {
