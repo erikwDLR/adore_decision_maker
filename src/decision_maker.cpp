@@ -156,37 +156,48 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
       params.stop_before_obstacle );
   }
 
-  RCLCPP_INFO(
-    node.get_logger(),
-    "[OA][params] enabled=%s max_object_ahead=%.3f max_static_object_speed=%.3f "
-    "ego_corridor_safety_margin=%.3f side_clearance=%.3f front_clearance=%.3f rear_clearance=%.3f stop_before_obstacle=%.3f "
-    "in_lane=%s adjacent=%s opposite=%s clustering=%s enforce_drivable_area=%s max_speed=%.3f "
-    "validate_shifted_trajectory=%s lateral_candidate_extra_steps=%d lateral_candidate_extra_step=%.3f "
-    "modified_route_monitor=%s modified_route_max_check_distance=%.3f modified_route_time_horizon=%.3f "
-    "stop_on_modified_route_conflict=%s lane_s_overlap_slack=%.3f lane_boundary_join_slack=%.3f",
-    params.enabled ? "true" : "false",
-    params.max_object_ahead,
-    params.max_static_object_speed,
-    params.ego_corridor_safety_margin,
-    params.side_clearance,
-    params.front_clearance,
-    params.rear_clearance,
-    params.stop_before_obstacle,
-    params.in_lane_shift_enabled ? "true" : "false",
-    params.adjacent_lane_enabled ? "true" : "false",
-    params.opposite_lane_enabled ? "true" : "false",
-    params.clustering_enabled ? "true" : "false",
-    params.enforce_drivable_area ? "true" : "false",
-    params.max_speed_during_avoidance,
-    params.validate_shifted_trajectory ? "true" : "false",
-    params.lateral_candidate_extra_steps,
-    params.lateral_candidate_extra_step,
-    params.modified_route_safety_check_enabled ? "true" : "false",
-    params.modified_route_max_check_distance,
-    params.modified_route_time_horizon,
-    params.stop_on_modified_route_conflict ? "true" : "false",
-    params.lane_s_overlap_slack,
-    params.lane_boundary_join_slack );
+RCLCPP_INFO(
+  node.get_logger(),
+  "[OA][params][advanced] "
+  "max_object_lateral_distance=%.3f min_obstacle_route_overlap=%.3f "
+  "min_oncoming_heading_diff=%.3f stop_time_step=%.3f prefer_left_shift=%s "
+  "max_projection_distance_from_route=%.3f "
+  "cluster_hold_gap_s=%.3f shift_hull_gap_s=%.3f "
+  "min_alpha_between_hull_obstacles=%.3f enable_multi_candidate_route_shift=%s",
+  params.max_object_lateral_distance,
+  params.min_obstacle_route_overlap,
+  params.min_oncoming_heading_diff,
+  params.stop_time_step,
+  params.prefer_left_shift ? "true" : "false",
+  params.max_projection_distance_from_route,
+  params.cluster_hold_gap_s,
+  params.shift_hull_gap_s,
+  params.min_alpha_between_hull_obstacles,
+  params.enable_multi_candidate_route_shift ? "true" : "false"
+);
+
+RCLCPP_INFO(
+  node.get_logger(),
+  "[OA][params][oncoming] "
+  "oncoming_time_margin=%.3f min_ego_speed_for_gap_check=%.3f "
+  "min_oncoming_speed_for_gap_check=%.3f min_oncoming_route_speed=%.3f "
+  "prediction_time_horizon=%.3f oncoming_safety_distance_front=%.3f "
+  "oncoming_safety_distance_rear=%.3f debug_oncoming_check=%s "
+  "modified_route_ttc_margin=%.3f modified_route_stop_ttc_threshold=%.3f "
+  "modified_route_braking_safety_margin=%.3f min_valid_stop_margin=%.3f",
+  params.oncoming_time_margin,
+  params.min_ego_speed_for_gap_check,
+  params.min_oncoming_speed_for_gap_check,
+  params.min_oncoming_route_speed,
+  params.prediction_time_horizon,
+  params.oncoming_safety_distance_front,
+  params.oncoming_safety_distance_rear,
+  params.debug_oncoming_check ? "true" : "false",
+  params.modified_route_ttc_margin,
+  params.modified_route_stop_ttc_threshold,
+  params.modified_route_braking_safety_margin,
+  params.min_valid_stop_margin
+);
 
   return params;
 }
