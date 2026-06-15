@@ -29,7 +29,7 @@
 #include "std_msgs/msg/bool.hpp"
 #include "planning/obstacle_avoidance.hpp"
 
-#include "active_avoidance_state.hpp"
+#include <planning/active_avoidance_state.hpp>
 
 namespace adore
 {
@@ -109,7 +109,7 @@ private:
 
 
   adore::planner::ObstacleAvoidanceParams obstacle_avoidance_params;
-  behavior::ActiveAvoidanceState active_avoidance_state;
+  adore::planner::ActiveAvoidanceState active_avoidance_state;
 };
 
 } // namespace adore

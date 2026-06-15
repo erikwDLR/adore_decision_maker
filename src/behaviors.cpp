@@ -245,10 +245,6 @@ public:
           previous_( planner.get_allow_previous_trajectory_fallback() )
     {
         planner_.set_allow_previous_trajectory_fallback( false );
-        RCLCPP_INFO(
-            rclcpp::get_logger( "Behaviors" ),
-            "[OA][ROUTE_GUARD] previous trajectory fallback disabled for %s",
-            context.c_str() );
     }
 
     ~PreviousTrajectoryFallbackGuard()
@@ -364,19 +360,6 @@ make_stop_route_on_active_route(
                 params );
         return stop_plan.route;
     }
-
-    RCLCPP_INFO(
-        rclcpp::get_logger( "Behaviors" ),
-        "[OA][STOP_ROUTE] building reachable stop profile active_route=%s ego_s=%.2f requested_stop_s=%.2f target_stop_s=%.2f v=%.2f braking_distance=%.2f safety_margin=%.2f reachability_margin=%.2f reason=%s",
-        active_route_name.c_str(),
-        ego_s,
-        requested_stop_s,
-        target_stop_s,
-        v0,
-        braking_distance,
-        safety_margin,
-        reachability_margin,
-        reason.c_str() );
 
     const auto stop_plan =
         planner::RouteStopPolicy::plan_stop_on_route(
@@ -506,11 +489,6 @@ make_stop_on_route_behavior(
 
         if( !trajectory.states.empty() )
         {
-            RCLCPP_INFO(
-                rclcpp::get_logger( "Behaviors" ),
-                "[OA][STOP_ROUTE] maximum route-based braking trajectory accepted active_route=%s ego_s=%.2f",
-                active_route_name.c_str(),
-                ego_s );
             trajectory.adjust_start_time( ego.time );
             trajectory.label =
                 "obstacle avoidance: maximum route-based braking on active " +
@@ -707,12 +685,6 @@ make_stop_on_active_route_behavior(
                 vehicle_params,
                 params ) )
         {
-            RCLCPP_INFO(
-                rclcpp::get_logger( "Behaviors" ),
-                "[OA][STOP_ROUTE] maximum route-based braking trajectory accepted active_route=%s ego_s=%.2f id=%d",
-                active_route_name.c_str(),
-                ego_s,
-                conflict.participant_id );
             trajectory.adjust_start_time( ego.time );
             trajectory.label =
                 "obstacle avoidance: maximum route-based braking on active " +
@@ -775,7 +747,7 @@ continue_active_avoidance(
     bool use_weather_comfort_settings,
     const dynamics::ComfortSettings& weather_comfort_settings,
     const std::string& weather_label,
-    ActiveAvoidanceState& active_avoidance_state )
+    planner::ActiveAvoidanceState& active_avoidance_state )
 {
     auto active_route =
         !active_avoidance_state.base_modified_route.reference_line.empty()
@@ -800,10 +772,6 @@ continue_active_avoidance(
             p.second.max_speed = 0;
         }
     }
-
-    RCLCPP_INFO(
-        rclcpp::get_logger( "Behaviors" ),
-        "[OA][ACTIVE_ROUTE] following modified_route" );
 
     auto make_active_stop_behavior =
         [&]( const std::string& label ) -> Behavior
@@ -998,40 +966,14 @@ continue_active_avoidance(
         vehicle_state_dynamic.time,
         params_for_obstacle_avoidance );
 
-    if( params_for_obstacle_avoidance.modified_route_safety_check_enabled )
+    if( params_for_obstacle_avoidance.modified_route_safety_check_enabled &&
+        active_route_safety.has_conflict )
     {
-        static bool active_route_safety_logged = false;
-        if( !active_route_safety_logged )
-        {
-            RCLCPP_INFO(
-                rclcpp::get_logger( "Behaviors" ),
-                "[OA][ROUTE_MONITOR] modified-route safety check active" );
-            active_route_safety_logged = true;
-        }
-
-        if( active_route_safety.has_conflict )
-        {
-            RCLCPP_WARN(
-                rclcpp::get_logger( "Behaviors" ),
-                "[OA][ROUTE_MONITOR] conflict on active route id=%d active_route=modified reason=%s",
-                active_route_safety.conflict.participant_id,
-                active_route_safety.conflict.reason.c_str() );
-        }
-        else
-        {
-            RCLCPP_DEBUG(
-                rclcpp::get_logger( "Behaviors" ),
-                "[OA][ROUTE_MONITOR] active_route=modified conflict=false" );
-        }
-    }
-
-    // Validate that we're ignoring the expected obstacles from the original avoidance
-    for( int ignored_id : active_avoidance_state.obstacle_ids )
-    {
-        RCLCPP_DEBUG(
+        RCLCPP_WARN(
             rclcpp::get_logger( "Behaviors" ),
-            "[OA][MONITOR] ignoring active avoidance obstacle id=%d as expected obstacle",
-            ignored_id );
+            "[OA][ROUTE_MONITOR] conflict on active route id=%d active_route=modified reason=%s",
+            active_route_safety.conflict.participant_id,
+            active_route_safety.conflict.reason.c_str() );
     }
 
     auto active_conflict =
@@ -1046,10 +988,6 @@ continue_active_avoidance(
             planner.get_physical_vehicle_parameters(),
             params_for_obstacle_avoidance ) )
     {
-        RCLCPP_INFO(
-            rclcpp::get_logger( "Behaviors" ),
-            "[OA][ACTIVE_ROUTE] ignoring oncoming other-lane conflict during in-lane shift id=%d",
-            active_conflict->participant_id );
         active_conflict.reset();
     }
 
@@ -1059,14 +997,6 @@ continue_active_avoidance(
             planner.get_physical_vehicle_parameters(),
             params_for_obstacle_avoidance ) )
     {
-        RCLCPP_INFO(
-            rclcpp::get_logger( "Behaviors" ),
-            "[OA][ACTIVE_ROUTE] ignoring static_or_slow side-clearance conflict id=%d type=%s l=[%.2f,%.2f] required_clearance=%.2f",
-            active_conflict->participant_id,
-            conflict_type_name( active_conflict.value() ),
-            active_conflict->object_l_min,
-            active_conflict->object_l_max,
-            std::max( 0.0, params_for_obstacle_avoidance.side_clearance ) );
         active_conflict.reset();
     }
 
@@ -1078,12 +1008,6 @@ continue_active_avoidance(
         active_conflict->object_s_max < ego_s_modified - 0.25 &&
         !active_conflict->currently_overlaps_ego_footprint )
     {
-        RCLCPP_INFO(
-            rclcpp::get_logger( "Behaviors" ),
-            "[OA][ACTIVE_ROUTE] ignoring static_or_slow conflict behind ego id=%d object_s_max=%.2f ego_s=%.2f",
-            active_conflict->participant_id,
-            active_conflict->object_s_max,
-            ego_s_modified );
         active_conflict.reset();
     }
 
@@ -1109,21 +1033,6 @@ continue_active_avoidance(
                  double projection_hint_s,
                  const std::vector<int>* additional_ignored_participant_ids = nullptr ) -> std::optional<Behavior>
         {
-            RCLCPP_WARN(
-                rclcpp::get_logger( "Behaviors" ),
-                "[OA][ACTIVE_ROUTE] new conflict id=%d; attempting dynamic replan from %s_route",
-                active_conflict->participant_id,
-                replan_base_name );
-
-            if( additional_ignored_participant_ids != nullptr &&
-                !additional_ignored_participant_ids->empty() )
-            {
-                RCLCPP_INFO(
-                    rclcpp::get_logger( "Behaviors" ),
-                    "[OA][ACTIVE_ROUTE][REPLAN] treating current active obstacle_ids=%s as expected during %s_route replan",
-                    ids_to_string( *additional_ignored_participant_ids ).c_str(),
-                    replan_base_name );
-            }
 
             const auto replan_result =
                 ::adore::planner::try_plan_obstacle_avoidance(
@@ -1133,14 +1042,6 @@ continue_active_avoidance(
                     traffic_participants,
                     params_for_obstacle_avoidance,
                     additional_ignored_participant_ids );
-
-            RCLCPP_INFO(
-                rclcpp::get_logger( "Behaviors" ),
-                "[OA][ACTIVE_ROUTE][REPLAN] result success=%s mode=%d bounds=%s reason=%s",
-                replan_result.success ? "true" : "false",
-                static_cast<int>( replan_result.mode ),
-                replan_result.has_maneuver_bounds ? "true" : "false",
-                replan_result.reason.c_str() );
 
             if( !replan_result.success ||
                 !replan_result.has_maneuver_bounds )
@@ -1293,15 +1194,6 @@ continue_active_avoidance(
                     active_conflict.value(),
                     params_for_obstacle_avoidance );
 
-            RCLCPP_INFO(
-                rclcpp::get_logger( "Behaviors" ),
-                "[OA][ACTIVE_STATE] conflict ahead id=%d type=%s dist=%.2f ttc=%.2f brake_start_s=%.2f ego_s=%.2f action=continue_active_route",
-                active_conflict->participant_id,
-                conflict_type_name( active_conflict.value() ),
-                active_conflict->distance_s,
-                active_conflict->time_to_conflict,
-                stop_plan.brake_start_s,
-                stop_plan.ego_s );
         }
         else
         {
@@ -1311,20 +1203,6 @@ continue_active_avoidance(
                     rclcpp::get_logger( "Behaviors" ),
                     "[OA][ACTIVE_ROUTE][REPLAN] no validated dynamic replan; stopping on active modified_route" );
             }
-            else
-            {
-                RCLCPP_INFO(
-                    rclcpp::get_logger( "Behaviors" ),
-                    "[OA][ACTIVE_STATE] monitored conflict (ghost) id=%d type=%s dist=%.2f ttc=%.2f action=stop_on_modified_route",
-                    active_conflict->participant_id,
-                    conflict_type_name( active_conflict.value() ),
-                    active_conflict->distance_s,
-                    active_conflict->time_to_conflict );
-            }
-
-            RCLCPP_INFO(
-                rclcpp::get_logger( "Behaviors" ),
-                "[OA][ACTIVE_STATE] using route-based stop policy after dynamic replan check" );
 
             return make_active_conflict_stop_behavior( active_conflict.value() );
         }
@@ -1358,37 +1236,8 @@ continue_active_avoidance(
             ego_s_modified );
 
     if( ( release_by_modified || release_by_original_fallback ) &&
-        retained_original_ghost.has_value() )
-    {
-        RCLCPP_INFO(
-            rclcpp::get_logger( "Behaviors" ),
-            "[OA][ghost] retained until pass id=%d ego_s=%.2f hold_until_s=%.2f",
-            retained_original_ghost->last_participant_id,
-            ego_s_modified,
-            retained_original_ghost->hold_until_s );
-    }
-
-    if( ( release_by_modified || release_by_original_fallback ) &&
         !retained_original_ghost.has_value() )
     {
-        std::size_t active_route_zero_speed_points = 0;
-        double first_zero_speed_s =
-            std::numeric_limits<double>::quiet_NaN();
-        double last_zero_speed_s =
-            std::numeric_limits<double>::quiet_NaN();
-        for( const auto& [s, point] : active_avoidance_state.modified_route.reference_line )
-        {
-            if( point.max_speed.has_value() && *point.max_speed <= 0.01 )
-            {
-                if( active_route_zero_speed_points == 0 )
-                {
-                    first_zero_speed_s = s;
-                }
-                last_zero_speed_s = s;
-                ++active_route_zero_speed_points;
-            }
-        }
-
         RCLCPP_INFO(
             rclcpp::get_logger( "Behaviors" ),
             "[OA][RELEASE] modified_route completed ego_s=%.2f release_s=%.2f obstacle_id=%d ego_s_orig=%.2f by=%s returning_to_original_route",
@@ -1397,20 +1246,6 @@ continue_active_avoidance(
             active_avoidance_state.obstacle_id,
             ego_s_original,
             release_by_modified ? "modified" : "original_fallback" );
-
-        RCLCPP_WARN(
-            rclcpp::get_logger( "Behaviors" ),
-            "[OA][RELEASE_CHECK] before reset obstacle_id=%d ego_s_mod=%.2f ego_s_orig=%.2f release_s=%.2f projection_diff=%.2f active_route_points=%zu stored_modified_route_points=%zu zero_speed_points=%zu first_zero_speed_s=%.2f last_zero_speed_s=%.2f",
-            active_avoidance_state.obstacle_id,
-            ego_s_modified,
-            ego_s_original,
-            active_avoidance_state.release_s,
-            projection_error,
-            active_route.reference_line.size(),
-            active_avoidance_state.modified_route.reference_line.size(),
-            active_route_zero_speed_points,
-            first_zero_speed_s,
-            last_zero_speed_s );
 
         if( projection_valid && projection_error > 2.0 )
         {
@@ -1421,10 +1256,6 @@ continue_active_avoidance(
                 ego_s_original,
                 projection_error );
         }
-
-        RCLCPP_WARN(
-            rclcpp::get_logger( "Behaviors" ),
-            "[OA][RELEASE_CHECK] resetting active avoidance state and planning driving mission on original route" );
 
         active_avoidance_state.reset();
 
@@ -1627,41 +1458,12 @@ continue_active_avoidance(
         trajectory_and_signal.modified_route =
             map::conversions::to_ros_msg( active_route_for_planning );
 
-        if( std::isfinite( ego_s_modified ) )
-        {
-            RCLCPP_INFO(
-                rclcpp::get_logger( "Behaviors" ),
-                "[OA][CONTINUE] obstacle_id=%d ego_xy=(%.3f, %.3f) v=%.3f "
-                "ego_s_mod=%.2f ego_s_orig=%.2f release_s=%.2f "
-                "remaining_mod=%.2f remaining_orig=%.2f",
-                active_avoidance_state.obstacle_id,
-                vehicle_state_dynamic.x,
-                vehicle_state_dynamic.y,
-                vehicle_state_dynamic.vx,
-                ego_s_modified,
-                ego_s_original,
-                active_avoidance_state.release_s,
-                active_avoidance_state.release_s - ego_s_modified,
-                active_avoidance_state.release_s - ego_s_original );
-        }
-        else
+        if( !std::isfinite( ego_s_modified ) )
         {
             RCLCPP_WARN(
                 rclcpp::get_logger( "Behaviors" ),
                 "[OA][CONTINUE] ego_s_modified invalid while OA active; continuing modified_route" );
         }
-
-        RCLCPP_INFO(
-            rclcpp::get_logger( "Behaviors" ),
-            "[OA][ACTIVE_STATE] continue active modified_route ego_s=%.2f release_s=%.2f",
-            ego_s_modified,
-            active_avoidance_state.release_s );
-        RCLCPP_INFO(
-            rclcpp::get_logger( "Behaviors" ),
-            "[OA][ACTIVE_STATE] follow modified_route ego_s=%.2f release_s=%.2f v=%.2f",
-            ego_s_modified,
-            active_avoidance_state.release_s,
-            vehicle_state_dynamic.vx );
 
         return trajectory_and_signal;
     }
@@ -1678,9 +1480,6 @@ try_ego_lane_oncoming_stop_behavior(
     const dynamics::TrafficParticipantSet& traffic_participants,
     const planner::ObstacleAvoidanceParams& params_for_obstacle_avoidance )
 {
-    RCLCPP_INFO(
-        rclcpp::get_logger( "Behaviors" ),
-        "[OA][STATE_NORMAL] follow original_route" );
 
     const auto ego_lane_oncoming_result =
         ::adore::planner::try_plan_ego_lane_oncoming_stop(
@@ -1803,7 +1602,7 @@ plan_obstacle_avoidance_behavior(
     const dynamics::VehicleStateDynamic& vehicle_state_dynamic,
     const dynamics::TrafficParticipantSet& traffic_participants,
     const planner::ObstacleAvoidanceParams& params_for_obstacle_avoidance,
-    ActiveAvoidanceState& active_avoidance_state )
+    planner::ActiveAvoidanceState& active_avoidance_state )
 {
     const auto original_route_safety =
         ::adore::planner::check_route_corridor_safety(
@@ -1824,9 +1623,6 @@ plan_obstacle_avoidance_behavior(
 
     if( !params_for_obstacle_avoidance.enabled )
     {
-        RCLCPP_INFO(
-            rclcpp::get_logger( "Behaviors" ),
-            "[OA][DISABLED] obstacle avoidance disabled by parameter; following original route" );
 
         if( original_route_safety.has_conflict )
         {
@@ -1899,13 +1695,6 @@ plan_obstacle_avoidance_behavior(
             traffic_participants,
             params_for_obstacle_avoidance );
 
-    RCLCPP_INFO(
-        rclcpp::get_logger( "Behaviors" ),
-        "Obstacle avoidance result: success=%s, mode=%d, reason=%s",
-        oa_result.success ? "true" : "false",
-        static_cast<int>( oa_result.mode ),
-        oa_result.reason.c_str() );
-
     if( oa_result.success )
     {
         // Only persist real avoidance maneuvers.
@@ -1944,11 +1733,6 @@ plan_obstacle_avoidance_behavior(
         }
         else
         {
-            RCLCPP_INFO(
-                rclcpp::get_logger( "Behaviors" ),
-                "[OA][NO_ACTIVE_STATE] using OA result without maneuver bounds: mode=%d reason=%s",
-                static_cast<int>( oa_result.mode ),
-                oa_result.reason.c_str() );
 
             // Remember the obstacle behind this stop/wait so short
             // perception dropouts do not toggle between stopping and
@@ -2264,7 +2048,7 @@ plan_obstacle_avoidance_behavior(
             const std::map<size_t, adore_ros2_msgs::msg::TrafficSignal>& traffic_signals,
             const std::optional<adore_ros2_msgs::msg::Weather>& weather,
             const planner::ObstacleAvoidanceParams& params_for_obstacle_avoidance,
-            ActiveAvoidanceState& active_avoidance_state )
+            planner::ActiveAvoidanceState& active_avoidance_state )
         {
             // Go through route, and update speed at points based on traffic signal positions.
             auto route_with_signal = route;
