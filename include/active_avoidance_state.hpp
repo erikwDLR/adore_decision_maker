@@ -1,6 +1,7 @@
 #pragma once
 #include <limits>
 #include <cmath>
+#include <optional>
 #include <vector>
 
 #include <adore_map/route.hpp>
@@ -37,9 +38,18 @@ struct ActiveAvoidanceState
   // ego is still passing them or while they conflict with the active route.
   std::vector<adore::planner::ObstacleGhostEnvelope> ghost_memory;
 
+  // Memory of the obstacle behind a stop/wait decision that did not start a
+  // shift maneuver (StopBeforeObstacle / WaitForOncoming). Bridges short
+  // perception dropouts so ego does not oscillate between stopping and
+  // resuming while approaching the obstacle.
+  std::optional<adore::planner::ObstacleGhostEnvelope> stop_hold;
+
   // Last valid projection on the active modified route. This keeps progress
   // monotonic while the route is laterally offset from the mission route.
+  // last_modified_time records when that projection was taken so implausible
+  // forward jumps can be bounded by odometry.
   double last_modified_s = std::numeric_limits<double>::quiet_NaN();
+  double last_modified_time = std::numeric_limits<double>::quiet_NaN();
 
   void reset()
   {
@@ -59,8 +69,10 @@ struct ActiveAvoidanceState
 
     maneuver = adore::planner::ObstacleAvoidanceManeuver{};
     ghost_memory.clear();
+    stop_hold.reset();
 
     last_modified_s = std::numeric_limits<double>::quiet_NaN();
+    last_modified_time = std::numeric_limits<double>::quiet_NaN();
   }
 };
 

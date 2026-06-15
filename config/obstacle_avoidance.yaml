@@ -10,6 +10,9 @@
     obstacle_avoidance.max_object_ahead: 60.0
     obstacle_avoidance.max_static_object_speed: 0.5
 
+    # Speed hysteresis before an already-avoided obstacle stops being ignored
+    obstacle_avoidance.ignored_obstacle_release_speed: 1.5
+
     # Ego-route relevance corridor
     obstacle_avoidance.ego_corridor_safety_margin: 0.2
 
@@ -29,7 +32,7 @@
 
     # Drivable area / route behavior
     obstacle_avoidance.enforce_drivable_area: true
-    obstacle_avoidance.max_speed_during_avoidance: 2.7
+    obstacle_avoidance.max_speed_during_avoidance: 2.78
 
     # Candidate generation
     obstacle_avoidance.validate_shifted_trajectory: true
@@ -40,7 +43,6 @@
     obstacle_avoidance.modified_route_safety_check_enabled: true
     obstacle_avoidance.modified_route_max_check_distance: 60.0
     obstacle_avoidance.modified_route_time_horizon: 12.0
-    obstacle_avoidance.stop_on_modified_route_conflict: true
 
     # --------------------------------------------------------------------------
     # Internal/advanced parameters
@@ -108,7 +110,7 @@
     obstacle_avoidance.ego_lane_oncoming_stop_enabled: true
 
     # Maximum longitudinal distance ahead of ego for oncoming participant
-    obstacle_avoidance.ego_lane_oncoming_max_distance: 100.0
+    obstacle_avoidance.ego_lane_oncoming_max_distance: 80.0
 
     # Maximum time-to-conflict for triggering defensive stop
     obstacle_avoidance.ego_lane_oncoming_time_horizon: 15.0
@@ -147,6 +149,8 @@
     obstacle_avoidance.route_window_min: 20.0
     obstacle_avoidance.trajectory_step_size: 0.05
     obstacle_avoidance.min_motion_speed: 0.05
+    # Lower bound for braking deceleration in stop-distance calculations
+    obstacle_avoidance.min_braking_deceleration: 0.5
     obstacle_avoidance.stop_adjustment_offset: 2.0
     obstacle_avoidance.lateral_shift_penalty_score: 20.0
     obstacle_avoidance.opposite_lane_penalty_score: 40.0

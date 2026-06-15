@@ -18,6 +18,8 @@
 #include "behaviors.hpp"
 #include "conditions.hpp"
 
+#include <adore_math/distance.h>
+
 #include <algorithm>
 
 namespace adore
@@ -70,6 +72,7 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
   params.enabled = node.declare_parameter<bool>( "obstacle_avoidance.enabled", params.enabled );
   params.max_object_ahead = node.declare_parameter<double>( "obstacle_avoidance.max_object_ahead", params.max_object_ahead );
   params.max_static_object_speed = node.declare_parameter<double>( "obstacle_avoidance.max_static_object_speed", params.max_static_object_speed );
+  params.ignored_obstacle_release_speed = node.declare_parameter<double>( "obstacle_avoidance.ignored_obstacle_release_speed", params.ignored_obstacle_release_speed );
   params.ego_corridor_safety_margin = node.declare_parameter<double>( "obstacle_avoidance.ego_corridor_safety_margin", params.ego_corridor_safety_margin );
   params.side_clearance = node.declare_parameter<double>( "obstacle_avoidance.side_clearance", params.side_clearance );
   params.front_clearance = node.declare_parameter<double>( "obstacle_avoidance.front_clearance", params.front_clearance );
@@ -87,7 +90,6 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
   params.modified_route_safety_check_enabled = node.declare_parameter<bool>( "obstacle_avoidance.modified_route_safety_check_enabled", params.modified_route_safety_check_enabled );
   params.modified_route_max_check_distance = node.declare_parameter<double>( "obstacle_avoidance.modified_route_max_check_distance", params.modified_route_max_check_distance );
   params.modified_route_time_horizon = node.declare_parameter<double>( "obstacle_avoidance.modified_route_time_horizon", params.modified_route_time_horizon );
-  params.stop_on_modified_route_conflict = node.declare_parameter<bool>( "obstacle_avoidance.stop_on_modified_route_conflict", params.stop_on_modified_route_conflict );
 
   // Internal/advanced parameters
   params.max_object_lateral_distance = node.declare_parameter<double>( "obstacle_avoidance.max_object_lateral_distance", params.max_object_lateral_distance );
@@ -140,6 +142,7 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
   params.route_window_min = node.declare_parameter<double>( "obstacle_avoidance.route_window_min", params.route_window_min );
   params.trajectory_step_size = node.declare_parameter<double>( "obstacle_avoidance.trajectory_step_size", params.trajectory_step_size );
   params.min_motion_speed = node.declare_parameter<double>( "obstacle_avoidance.min_motion_speed", params.min_motion_speed );
+  params.min_braking_deceleration = node.declare_parameter<double>( "obstacle_avoidance.min_braking_deceleration", params.min_braking_deceleration );
   params.stop_adjustment_offset = node.declare_parameter<double>( "obstacle_avoidance.stop_adjustment_offset", params.stop_adjustment_offset );
   params.lateral_shift_penalty_score = node.declare_parameter<double>( "obstacle_avoidance.lateral_shift_penalty_score", params.lateral_shift_penalty_score );
   params.opposite_lane_penalty_score = node.declare_parameter<double>( "obstacle_avoidance.opposite_lane_penalty_score", params.opposite_lane_penalty_score );
@@ -247,7 +250,29 @@ void DecisionMaker::setup_subscribers()
                                       [this](const adore_ros2_msgs::msg::VehicleStateDynamic& msg) {  latest_vehicle_state_dynamic = dynamics::conversions::to_cpp_type(msg); });
 
   subscriber_route = create_subscription<adore_ros2_msgs::msg::Route>( "route", 1,
-                                      [this](const adore_ros2_msgs::msg::Route& msg) {  latest_route = map::conversions::to_cpp_type(msg); });
+                                      [this](const adore_ros2_msgs::msg::Route& msg) {
+                                        auto new_route = map::conversions::to_cpp_type(msg);
+
+                                        // A new mission invalidates the stored modified route of an
+                                        // active avoidance maneuver; keeping it would make ego follow
+                                        // (or brake on) a route that no longer matches the mission.
+                                        if( active_avoidance_state.active && latest_route.has_value() )
+                                        {
+                                          const double destination_shift =
+                                            adore::math::distance_2d( latest_route->destination, new_route.destination );
+
+                                          if( destination_shift > 1.0 )
+                                          {
+                                            RCLCPP_WARN(
+                                              get_logger(),
+                                              "[OA] route destination changed by %.2f m while avoidance active; resetting active avoidance state",
+                                              destination_shift );
+                                            active_avoidance_state.reset();
+                                          }
+                                        }
+
+                                        latest_route = new_route;
+                                      });
 
   subscriber_odd = create_subscription<adore_ros2_msgs::msg::Odd>( "odd", 1,
                                       [this](const adore_ros2_msgs::msg::Odd& msg) {  latest_odd = msg; });
