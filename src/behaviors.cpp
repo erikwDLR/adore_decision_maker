@@ -733,6 +733,308 @@ make_stop_on_active_route_behavior(
 namespace
 {
 
+// Opposite-lane safety monitor for an active avoidance maneuver. Returns the
+// conflict to stop for, or nullopt to keep following the route. With
+// planned_trajectory == nullptr this runs the pre-commitment check; with a
+// planned trajectory it runs the post-replan ("planned") check. The only
+// differences between the two are the trajectory argument, the projection hint
+// and the log/source tag prefix.
+std::optional<::adore::planner::RouteCorridorConflict>
+check_opposite_lane_monitor(
+    const map::Route& route,
+    const dynamics::VehicleStateDynamic& ego,
+    const dynamics::TrafficParticipantSet& traffic_participants,
+    const planner::ObstacleAvoidanceManeuver& maneuver,
+    int obstacle_id,
+    double conflict_hint_s,
+    const planner::ObstacleAvoidanceParams& params,
+    const dynamics::Trajectory* planned_trajectory )
+{
+    if( !( maneuver.active && maneuver.uses_opposite_lane ) )
+    {
+        return std::nullopt;
+    }
+
+    const char* const tag_prefix = planned_trajectory != nullptr ? "PLANNED_" : "";
+
+    const auto monitor_result =
+        ::adore::planner::monitor_active_obstacle_avoidance_maneuver(
+            route,
+            ego,
+            traffic_participants,
+            maneuver,
+            params,
+            planned_trajectory );
+
+    if( monitor_result.should_abort_before_commitment )
+    {
+        RCLCPP_WARN(
+            rclcpp::get_logger( "Behaviors" ),
+            "[OA][MONITOR][%sABORT] obstacle_id=%d reason=%s; using route-based stop policy",
+            tag_prefix,
+            obstacle_id,
+            monitor_result.reason.c_str() );
+
+        return make_oncoming_monitor_conflict(
+            monitor_result,
+            conflict_hint_s,
+            planned_trajectory != nullptr
+                ? "planned_opposite_lane_monitor"
+                : "opposite_lane_monitor" );
+    }
+
+    if( !monitor_result.safe_to_continue )
+    {
+        // Past commitment, stopping inside the opposite lane is usually more
+        // dangerous than finishing the maneuver. Stop only if the conflicting
+        // participant is already inside the conflict interval; for a predicted
+        // future arrival, keep following the active route to clear the opposite
+        // lane as quickly as possible.
+        const bool conflict_already_in_interval =
+            monitor_result.oncoming.oncoming_arrival_time <= 1e-6;
+
+        if( conflict_already_in_interval )
+        {
+            RCLCPP_WARN(
+                rclcpp::get_logger( "Behaviors" ),
+                "[OA][MONITOR][%sCOMMITTED] obstacle_id=%d reason=%s; already in interval, using route-based stop policy",
+                tag_prefix,
+                obstacle_id,
+                monitor_result.reason.c_str() );
+
+            return make_oncoming_monitor_conflict(
+                monitor_result,
+                conflict_hint_s,
+                planned_trajectory != nullptr
+                    ? "planned_opposite_lane_monitor_committed"
+                    : "opposite_lane_monitor_committed" );
+        }
+
+        RCLCPP_WARN(
+            rclcpp::get_logger( "Behaviors" ),
+            "[OA][MONITOR][%sCOMMITTED] obstacle_id=%d reason=%s; continuing to clear the opposite lane instead of stopping in it",
+            tag_prefix,
+            obstacle_id,
+            monitor_result.reason.c_str() );
+    }
+
+    return std::nullopt;
+}
+
+// Try to reshape the active maneuver from a base route (active modified or
+// mission). On success starts/refreshes the avoidance state and returns the
+// resulting Behavior; nullopt means keep the previous active route this cycle.
+std::optional<Behavior>
+try_dynamic_replan_from_route(
+    planner::TrajectoryPlanner& planner,
+    const map::Route& replan_base_route,
+    const char* replan_base_name,
+    double projection_hint_s,
+    const dynamics::VehicleStateDynamic& vehicle_state_dynamic,
+    const dynamics::TrafficParticipantSet& traffic_participants,
+    const planner::ObstacleAvoidanceParams& params_for_obstacle_avoidance,
+    planner::ActiveAvoidanceState& active_avoidance_state,
+    const std::vector<int>* additional_ignored_participant_ids = nullptr )
+{
+
+    const auto replan_result =
+        ::adore::planner::try_plan_obstacle_avoidance(
+            planner,
+            replan_base_route,
+            vehicle_state_dynamic,
+            traffic_participants,
+            params_for_obstacle_avoidance,
+            additional_ignored_participant_ids );
+
+    if( !replan_result.success ||
+        !replan_result.has_maneuver_bounds )
+    {
+        return std::nullopt;
+    }
+
+    dynamics::Trajectory trajectory;
+    double replan_ego_s =
+        get_s_on_reference_line_segments(
+            replan_result.modified_route,
+            vehicle_state_dynamic,
+            projection_hint_s,
+            params_for_obstacle_avoidance.route_window_min,
+            params_for_obstacle_avoidance.max_projection_distance_from_route );
+    if( !std::isfinite( replan_ego_s ) )
+    {
+        replan_ego_s = projection_hint_s;
+        RCLCPP_WARN(
+            rclcpp::get_logger( "Behaviors" ),
+            "[OA][ROUTE_ONLY][REPLAN] modified-route projection failed; using %s-route s=%.2f",
+            replan_base_name,
+            replan_ego_s );
+    }
+
+    auto replan_route_for_planning =
+        apply_active_avoidance_speed_profile(
+            replan_result.modified_route,
+            replan_ego_s,
+            replan_result.shift_start_s,
+            replan_result.shift_end_s,
+            replan_result.maneuver.release_s,
+            planner.get_physical_vehicle_parameters(),
+            params_for_obstacle_avoidance );
+
+    try
+    {
+        PreviousTrajectoryFallbackGuard fallback_guard(
+            planner,
+            "dynamic modified-route replan" );
+        trajectory =
+            planner.plan_route_trajectory_from_s(
+                replan_route_for_planning,
+                vehicle_state_dynamic,
+                traffic_participants,
+                replan_ego_s );
+    }
+    catch( const std::exception& e )
+    {
+        RCLCPP_ERROR(
+            rclcpp::get_logger( "Behaviors" ),
+            "[OA][ROUTE_ONLY][REPLAN] planner exception on accepted modified_route; keeping previous active route for now: %s",
+            e.what() );
+        return std::nullopt;
+    }
+
+    if( trajectory.states.empty() )
+    {
+        RCLCPP_ERROR(
+            rclcpp::get_logger( "Behaviors" ),
+            "[OA][ROUTE_ONLY][REPLAN] planner returned empty trajectory; keeping previous active route for now" );
+        return std::nullopt;
+    }
+
+    start_active_avoidance_state(
+        active_avoidance_state,
+        replan_result,
+        replan_base_route,
+        traffic_participants,
+        vehicle_state_dynamic,
+        params_for_obstacle_avoidance,
+        true );
+    if( additional_ignored_participant_ids != nullptr )
+    {
+        append_unique_ids(
+            active_avoidance_state.obstacle_ids,
+            *additional_ignored_participant_ids );
+        append_unique_ids(
+            active_avoidance_state.maneuver.obstacle_ids,
+            *additional_ignored_participant_ids );
+    }
+    active_avoidance_state.modified_route =
+        replan_route_for_planning;
+
+    trajectory.adjust_start_time( vehicle_state_dynamic.time );
+    trajectory.label =
+        obstacle_avoidance_label(
+            replan_result.mode,
+            replan_result.in_lane,
+            replan_result.lateral_shift,
+            true );
+
+    Behavior trajectory_and_signal;
+    trajectory_and_signal.trajectory =
+        dynamics::conversions::to_ros_msg( trajectory );
+    trajectory_and_signal.modified_route =
+        map::conversions::to_ros_msg(
+            replan_route_for_planning );
+
+    RCLCPP_INFO(
+        rclcpp::get_logger( "Behaviors" ),
+        "[OA][ACTIVE_ROUTE][REPLAN] accepted dynamic modified_route from %s_route obstacle_ids=%s obstacle_id=%d cluster_s=[%.2f,%.2f] shift_start_s=%.2f shift_end_s=%.2f release_s=%.2f shift=%.2f in_lane=%s opposite=%s ghosts=%zu",
+        replan_base_name,
+        ids_to_string( active_avoidance_state.obstacle_ids ).c_str(),
+        active_avoidance_state.obstacle_id,
+        replan_result.obstacle_s_min,
+        replan_result.obstacle_s_max,
+        active_avoidance_state.shift_start_s,
+        active_avoidance_state.shift_end_s,
+        active_avoidance_state.release_s,
+        active_avoidance_state.lateral_shift,
+        active_avoidance_state.in_lane ? "true" : "false",
+        active_avoidance_state.maneuver.uses_opposite_lane ? "true" : "false",
+        active_avoidance_state.ghost_memory.size() );
+
+    return trajectory_and_signal;
+}
+
+// Enforce monotonic, plausible progression of ego's arc length on the active
+// modified route: never go backward, clamp implausible forward jumps to the
+// odometry-based advance, and fall back to the last value when the projection is
+// lost. Updates last_modified_s/last_modified_time and returns the value, or
+// nullopt if no valid s exists (the caller should brake on the route).
+std::optional<double>
+compute_monotonic_ego_s_modified(
+    double ego_s_modified_raw,
+    const dynamics::VehicleStateDynamic& vehicle_state_dynamic,
+    planner::ActiveAvoidanceState& active_avoidance_state )
+{
+    double ego_s_modified = ego_s_modified_raw;
+
+    if( std::isfinite( ego_s_modified_raw ) &&
+        std::isfinite( active_avoidance_state.last_modified_s ) )
+    {
+        // Enforce monotonic progression: never go backward. Forward
+        // jumps beyond what the vehicle can have travelled since the
+        // last cycle are projection artifacts (e.g. matches at the
+        // search-window edge); advance by odometry instead of
+        // latching the jump permanently.
+        const double dt =
+            std::isfinite( active_avoidance_state.last_modified_time )
+                ? std::max(
+                      0.0,
+                      vehicle_state_dynamic.time -
+                          active_avoidance_state.last_modified_time )
+                : 0.0;
+        const double odometry_advance =
+            std::max( 0.0, vehicle_state_dynamic.vx ) * dt;
+        const double max_plausible_advance =
+            odometry_advance + MAX_PLAUSIBLE_MODIFIED_S_JUMP;
+
+        if( ego_s_modified_raw < active_avoidance_state.last_modified_s )
+        {
+            ego_s_modified = active_avoidance_state.last_modified_s;
+        }
+        else if( ego_s_modified_raw - active_avoidance_state.last_modified_s >
+                 max_plausible_advance )
+        {
+            ego_s_modified =
+                active_avoidance_state.last_modified_s + odometry_advance;
+            RCLCPP_WARN(
+                rclcpp::get_logger( "Behaviors" ),
+                "[OA][WARN] implausible ego_s_modified jump raw=%.2f last=%.2f max_advance=%.2f; using odometry advance to %.2f",
+                ego_s_modified_raw,
+                active_avoidance_state.last_modified_s,
+                max_plausible_advance,
+                ego_s_modified );
+        }
+    }
+    else if( !std::isfinite( ego_s_modified_raw ) &&
+             std::isfinite( active_avoidance_state.last_modified_s ) )
+    {
+        // Fallback: projection lost, use last valid value
+        ego_s_modified = active_avoidance_state.last_modified_s;
+        RCLCPP_WARN(
+            rclcpp::get_logger( "Behaviors" ),
+            "[OA][WARN] ego_s_modified projection lost; using last_modified_s=%.2f",
+            active_avoidance_state.last_modified_s );
+    }
+
+    if( !std::isfinite( ego_s_modified ) )
+    {
+        return std::nullopt;
+    }
+
+    active_avoidance_state.last_modified_s = ego_s_modified;
+    active_avoidance_state.last_modified_time = vehicle_state_dynamic.time;
+    return ego_s_modified;
+}
+
 // Active obstacle-avoidance maneuver handling: keep following the stored
 // modified route, monitor it for new/oncoming conflicts, replan or stop as
 // needed, and release back to the mission route once the obstacle is passed.
@@ -799,76 +1101,19 @@ continue_active_avoidance(
                 "modified" );
         };
 
-    if( active_avoidance_state.maneuver.active &&
-        active_avoidance_state.maneuver.uses_opposite_lane )
-    {
-        const auto monitor_result =
-            ::adore::planner::monitor_active_obstacle_avoidance_maneuver(
+    if( auto monitor_conflict =
+            check_opposite_lane_monitor(
                 active_route,
                 vehicle_state_dynamic,
                 traffic_participants,
                 active_avoidance_state.maneuver,
-                params_for_obstacle_avoidance );
-
-        if( monitor_result.should_abort_before_commitment )
-        {
-            RCLCPP_WARN(
-                rclcpp::get_logger( "Behaviors" ),
-                "[OA][MONITOR][ABORT] obstacle_id=%d reason=%s",
                 active_avoidance_state.obstacle_id,
-                monitor_result.reason.c_str() );
-
-            const auto monitor_conflict =
-                make_oncoming_monitor_conflict(
-                    monitor_result,
-                    active_avoidance_state.last_modified_s,
-                    "opposite_lane_monitor" );
-
-            RCLCPP_WARN(
-                rclcpp::get_logger( "Behaviors" ),
-                "[OA][ACTIVE_STATE] opposite-lane monitor conflict; using route-based stop policy" );
-
-            return make_active_conflict_stop_behavior( monitor_conflict );
-        }
-
-        if( !monitor_result.safe_to_continue )
-        {
-            // Past commitment, stopping inside the opposite lane is
-            // usually more dangerous than finishing the maneuver.
-            // Stop only if the conflicting participant is already
-            // inside the conflict interval; for a predicted future
-            // arrival, keep following the active route to clear the
-            // opposite lane as quickly as possible.
-            const bool conflict_already_in_interval =
-                monitor_result.oncoming.oncoming_arrival_time <= 1e-6;
-
-            if( conflict_already_in_interval )
-            {
-                RCLCPP_WARN(
-                    rclcpp::get_logger( "Behaviors" ),
-                    "[OA][MONITOR][COMMITTED] obstacle_id=%d reason=%s",
-                    active_avoidance_state.obstacle_id,
-                    monitor_result.reason.c_str() );
-
-                const auto monitor_conflict =
-                    make_oncoming_monitor_conflict(
-                        monitor_result,
-                        active_avoidance_state.last_modified_s,
-                        "opposite_lane_monitor_committed" );
-
-                RCLCPP_WARN(
-                    rclcpp::get_logger( "Behaviors" ),
-                    "[OA][ACTIVE_STATE] committed opposite-lane monitor conflict already in interval; using route-based stop policy" );
-
-                return make_active_conflict_stop_behavior( monitor_conflict );
-            }
-
-            RCLCPP_WARN(
-                rclcpp::get_logger( "Behaviors" ),
-                "[OA][MONITOR][COMMITTED] obstacle_id=%d reason=%s; continuing to clear the opposite lane instead of stopping in it",
-                active_avoidance_state.obstacle_id,
-                monitor_result.reason.c_str() );
-        }
+                active_avoidance_state.last_modified_s,
+                params_for_obstacle_avoidance,
+                nullptr );
+        monitor_conflict.has_value() )
+    {
+        return make_active_conflict_stop_behavior( monitor_conflict.value() );
     }
 
     const double ego_s_original =
@@ -882,64 +1127,13 @@ continue_active_avoidance(
             params_for_obstacle_avoidance.route_window_min,
             params_for_obstacle_avoidance.max_projection_distance_from_route );
 
-    // Make ego_s_modified monotonic during active OA
-    double ego_s_modified = ego_s_modified_raw;
+    const auto ego_s_modified_opt =
+        compute_monotonic_ego_s_modified(
+            ego_s_modified_raw,
+            vehicle_state_dynamic,
+            active_avoidance_state );
 
-    if( std::isfinite( ego_s_modified_raw ) &&
-        std::isfinite( active_avoidance_state.last_modified_s ) )
-    {
-        // Enforce monotonic progression: never go backward. Forward
-        // jumps beyond what the vehicle can have travelled since the
-        // last cycle are projection artifacts (e.g. matches at the
-        // search-window edge); advance by odometry instead of
-        // latching the jump permanently.
-        const double dt =
-            std::isfinite( active_avoidance_state.last_modified_time )
-                ? std::max(
-                      0.0,
-                      vehicle_state_dynamic.time -
-                          active_avoidance_state.last_modified_time )
-                : 0.0;
-        const double odometry_advance =
-            std::max( 0.0, vehicle_state_dynamic.vx ) * dt;
-        const double max_plausible_advance =
-            odometry_advance + MAX_PLAUSIBLE_MODIFIED_S_JUMP;
-
-        if( ego_s_modified_raw < active_avoidance_state.last_modified_s )
-        {
-            ego_s_modified = active_avoidance_state.last_modified_s;
-        }
-        else if( ego_s_modified_raw - active_avoidance_state.last_modified_s >
-                 max_plausible_advance )
-        {
-            ego_s_modified =
-                active_avoidance_state.last_modified_s + odometry_advance;
-            RCLCPP_WARN(
-                rclcpp::get_logger( "Behaviors" ),
-                "[OA][WARN] implausible ego_s_modified jump raw=%.2f last=%.2f max_advance=%.2f; using odometry advance to %.2f",
-                ego_s_modified_raw,
-                active_avoidance_state.last_modified_s,
-                max_plausible_advance,
-                ego_s_modified );
-        }
-    }
-    else if( !std::isfinite( ego_s_modified_raw ) &&
-             std::isfinite( active_avoidance_state.last_modified_s ) )
-    {
-        // Fallback: projection lost, use last valid value
-        ego_s_modified = active_avoidance_state.last_modified_s;
-        RCLCPP_WARN(
-            rclcpp::get_logger( "Behaviors" ),
-            "[OA][WARN] ego_s_modified projection lost; using last_modified_s=%.2f",
-            active_avoidance_state.last_modified_s );
-    }
-
-    if( std::isfinite( ego_s_modified ) )
-    {
-        active_avoidance_state.last_modified_s = ego_s_modified;
-        active_avoidance_state.last_modified_time = vehicle_state_dynamic.time;
-    }
-    else
+    if( !ego_s_modified_opt.has_value() )
     {
         RCLCPP_ERROR(
             rclcpp::get_logger( "Behaviors" ),
@@ -948,6 +1142,8 @@ continue_active_avoidance(
         return make_active_stop_behavior(
             "driving mission (active OA route stop: invalid modified-route projection)" );
     }
+
+    const double ego_s_modified = ego_s_modified_opt.value();
 
     const auto active_route_safety =
         ::adore::planner::check_route_corridor_safety(
@@ -1027,146 +1223,18 @@ continue_active_avoidance(
                 active_conflict.value(),
                 params_for_obstacle_avoidance );
 
-        auto try_dynamic_replan_from_route =
-            [&]( const map::Route& replan_base_route,
-                 const char* replan_base_name,
-                 double projection_hint_s,
-                 const std::vector<int>* additional_ignored_participant_ids = nullptr ) -> std::optional<Behavior>
-        {
-
-            const auto replan_result =
-                ::adore::planner::try_plan_obstacle_avoidance(
-                    planner,
-                    replan_base_route,
-                    vehicle_state_dynamic,
-                    traffic_participants,
-                    params_for_obstacle_avoidance,
-                    additional_ignored_participant_ids );
-
-            if( !replan_result.success ||
-                !replan_result.has_maneuver_bounds )
-            {
-                return std::nullopt;
-            }
-
-            dynamics::Trajectory trajectory;
-            double replan_ego_s =
-                get_s_on_reference_line_segments(
-                    replan_result.modified_route,
-                    vehicle_state_dynamic,
-                    projection_hint_s,
-                    params_for_obstacle_avoidance.route_window_min,
-                    params_for_obstacle_avoidance.max_projection_distance_from_route );
-            if( !std::isfinite( replan_ego_s ) )
-            {
-                replan_ego_s = projection_hint_s;
-                RCLCPP_WARN(
-                    rclcpp::get_logger( "Behaviors" ),
-                    "[OA][ROUTE_ONLY][REPLAN] modified-route projection failed; using %s-route s=%.2f",
-                    replan_base_name,
-                    replan_ego_s );
-            }
-
-            auto replan_route_for_planning =
-                apply_active_avoidance_speed_profile(
-                    replan_result.modified_route,
-                    replan_ego_s,
-                    replan_result.shift_start_s,
-                    replan_result.shift_end_s,
-                    replan_result.maneuver.release_s,
-                    planner.get_physical_vehicle_parameters(),
-                    params_for_obstacle_avoidance );
-
-            try
-            {
-                PreviousTrajectoryFallbackGuard fallback_guard(
-                    planner,
-                    "dynamic modified-route replan" );
-                trajectory =
-                    planner.plan_route_trajectory_from_s(
-                        replan_route_for_planning,
-                        vehicle_state_dynamic,
-                        traffic_participants,
-                        replan_ego_s );
-            }
-            catch( const std::exception& e )
-            {
-                RCLCPP_ERROR(
-                    rclcpp::get_logger( "Behaviors" ),
-                    "[OA][ROUTE_ONLY][REPLAN] planner exception on accepted modified_route; keeping previous active route for now: %s",
-                    e.what() );
-                return std::nullopt;
-            }
-
-            if( trajectory.states.empty() )
-            {
-                RCLCPP_ERROR(
-                    rclcpp::get_logger( "Behaviors" ),
-                    "[OA][ROUTE_ONLY][REPLAN] planner returned empty trajectory; keeping previous active route for now" );
-                return std::nullopt;
-            }
-
-            start_active_avoidance_state(
-                active_avoidance_state,
-                replan_result,
-                replan_base_route,
-                traffic_participants,
-                vehicle_state_dynamic,
-                params_for_obstacle_avoidance,
-                true );
-            if( additional_ignored_participant_ids != nullptr )
-            {
-                append_unique_ids(
-                    active_avoidance_state.obstacle_ids,
-                    *additional_ignored_participant_ids );
-                append_unique_ids(
-                    active_avoidance_state.maneuver.obstacle_ids,
-                    *additional_ignored_participant_ids );
-            }
-            active_avoidance_state.modified_route =
-                replan_route_for_planning;
-
-            trajectory.adjust_start_time( vehicle_state_dynamic.time );
-            trajectory.label =
-                obstacle_avoidance_label(
-                    replan_result.mode,
-                    replan_result.in_lane,
-                    replan_result.lateral_shift,
-                    true );
-
-            Behavior trajectory_and_signal;
-            trajectory_and_signal.trajectory =
-                dynamics::conversions::to_ros_msg( trajectory );
-            trajectory_and_signal.modified_route =
-                map::conversions::to_ros_msg(
-                    replan_route_for_planning );
-
-            RCLCPP_INFO(
-                rclcpp::get_logger( "Behaviors" ),
-                "[OA][ACTIVE_ROUTE][REPLAN] accepted dynamic modified_route from %s_route obstacle_ids=%s obstacle_id=%d cluster_s=[%.2f,%.2f] shift_start_s=%.2f shift_end_s=%.2f release_s=%.2f shift=%.2f in_lane=%s opposite=%s ghosts=%zu",
-                replan_base_name,
-                ids_to_string( active_avoidance_state.obstacle_ids ).c_str(),
-                active_avoidance_state.obstacle_id,
-                replan_result.obstacle_s_min,
-                replan_result.obstacle_s_max,
-                active_avoidance_state.shift_start_s,
-                active_avoidance_state.shift_end_s,
-                active_avoidance_state.release_s,
-                active_avoidance_state.lateral_shift,
-                active_avoidance_state.in_lane ? "true" : "false",
-                active_avoidance_state.maneuver.uses_opposite_lane ? "true" : "false",
-                active_avoidance_state.ghost_memory.size() );
-
-            return trajectory_and_signal;
-        };
-
         if( is_new_conflict )
         {
             if( auto replanned_behavior =
                     try_dynamic_replan_from_route(
+                        planner,
                         active_route,
                         "active",
                         ego_s_modified,
+                        vehicle_state_dynamic,
+                        traffic_participants,
+                        params_for_obstacle_avoidance,
+                        active_avoidance_state,
                         &active_avoidance_state.obstacle_ids );
                 replanned_behavior.has_value() )
             {
@@ -1175,9 +1243,14 @@ continue_active_avoidance(
 
             if( auto replanned_behavior =
                     try_dynamic_replan_from_route(
+                        planner,
                         route_with_signal,
                         "mission",
-                        ego_s_original );
+                        ego_s_original,
+                        vehicle_state_dynamic,
+                        traffic_participants,
+                        params_for_obstacle_avoidance,
+                        active_avoidance_state );
                 replanned_behavior.has_value() )
             {
                 return replanned_behavior.value();
@@ -1379,74 +1452,19 @@ continue_active_avoidance(
                 "driving mission (active OA controlled stop: planning failed)" );
         }
 
-        if( active_avoidance_state.maneuver.active &&
-            active_avoidance_state.maneuver.uses_opposite_lane )
-        {
-            const auto planned_monitor_result =
-                ::adore::planner::monitor_active_obstacle_avoidance_maneuver(
+        if( auto monitor_conflict =
+                check_opposite_lane_monitor(
                     active_route_for_planning,
                     vehicle_state_dynamic,
                     traffic_participants,
                     active_avoidance_state.maneuver,
+                    active_avoidance_state.obstacle_id,
+                    ego_s_modified,
                     params_for_obstacle_avoidance,
                     &trajectory );
-
-            if( planned_monitor_result.should_abort_before_commitment )
-            {
-                RCLCPP_WARN(
-                    rclcpp::get_logger( "Behaviors" ),
-                    "[OA][MONITOR][PLANNED_ABORT] obstacle_id=%d reason=%s",
-                    active_avoidance_state.obstacle_id,
-                    planned_monitor_result.reason.c_str() );
-
-                const auto monitor_conflict =
-                    make_oncoming_monitor_conflict(
-                        planned_monitor_result,
-                        ego_s_modified,
-                        "planned_opposite_lane_monitor" );
-
-                RCLCPP_WARN(
-                    rclcpp::get_logger( "Behaviors" ),
-                    "[OA][ACTIVE_STATE] planned opposite-lane monitor conflict; using route-based stop policy" );
-
-                return make_active_conflict_stop_behavior( monitor_conflict );
-            }
-
-            if( !planned_monitor_result.safe_to_continue )
-            {
-                // Same committed policy as the early monitor: stop
-                // only if the conflict is already inside the
-                // interval, otherwise clear the opposite lane.
-                const bool conflict_already_in_interval =
-                    planned_monitor_result.oncoming.oncoming_arrival_time <= 1e-6;
-
-                if( conflict_already_in_interval )
-                {
-                    RCLCPP_WARN(
-                        rclcpp::get_logger( "Behaviors" ),
-                        "[OA][MONITOR][PLANNED_COMMITTED] obstacle_id=%d reason=%s",
-                        active_avoidance_state.obstacle_id,
-                        planned_monitor_result.reason.c_str() );
-
-                    const auto monitor_conflict =
-                        make_oncoming_monitor_conflict(
-                            planned_monitor_result,
-                            ego_s_modified,
-                            "planned_opposite_lane_monitor_committed" );
-
-                    RCLCPP_WARN(
-                        rclcpp::get_logger( "Behaviors" ),
-                        "[OA][ACTIVE_STATE] planned committed opposite-lane monitor conflict already in interval; using route-based stop policy" );
-
-                    return make_active_conflict_stop_behavior( monitor_conflict );
-                }
-
-                RCLCPP_WARN(
-                    rclcpp::get_logger( "Behaviors" ),
-                    "[OA][MONITOR][PLANNED_COMMITTED] obstacle_id=%d reason=%s; continuing to clear the opposite lane instead of stopping in it",
-                    active_avoidance_state.obstacle_id,
-                    planned_monitor_result.reason.c_str() );
-            }
+            monitor_conflict.has_value() )
+        {
+            return make_active_conflict_stop_behavior( monitor_conflict.value() );
         }
 
         trajectory.adjust_start_time( vehicle_state_dynamic.time );
