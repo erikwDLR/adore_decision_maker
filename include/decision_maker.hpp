@@ -54,7 +54,7 @@ private:
   rclcpp::Subscription<adore_ros2_msgs::msg::VehicleInfo>::SharedPtr subscriber_vehicle_info;
  
   // World subscribers
-  rclcpp::Subscription<adore_ros2_msgs::msg::TrafficSignal>::SharedPtr subscriber_traffic_signal;
+  rclcpp::Subscription<adore_ros2_msgs::msg::TrafficSignals>::SharedPtr subscriber_traffic_signals;
   rclcpp::Subscription<adore_ros2_msgs::msg::SafetyCorridor>::SharedPtr subscriber_safety_corridor;
   rclcpp::Subscription<adore_ros2_msgs::msg::Trajectory>::SharedPtr subscriber_reference_trajectory;
 
@@ -81,7 +81,7 @@ private:
   // Domain
   std::optional<dynamics::VehicleStateDynamic> latest_vehicle_state_dynamic;
   std::optional<map::Route> latest_route;
-  std::map<size_t, adore_ros2_msgs::msg::TrafficSignal> traffic_signals;
+  adore_ros2_msgs::msg::TrafficSignals traffic_signals;
   std::optional<dynamics::Trajectory> suggested_remote_operator_trajectory; // A trajectory received by a remote operator
   bool remote_operator_drive_approval = false;
   std::optional<adore_ros2_msgs::msg::SafetyCorridor> latest_safety_corridor;

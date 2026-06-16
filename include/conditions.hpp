@@ -27,7 +27,7 @@ namespace adore
         const size_t MININUM_REFERENCE_TRAJECTORY_SIZE = 5;
         const double MAXIMUM_VEHICLE_STATE_DYNAMIC_AGE_SECONDS = 1.0;
         const double MAXIMUM_REFERENCE_TRAJECTORY_AGE_SECONDS = 1.0; 
-        const size_t MINIMUM_ROUTE_LENGHTH_METERS = 20; 
+        const size_t MINIMUM_ROUTE_LENGHTH_METERS = 1;
         const double MAXIMUM_ODD_AGE_SECONDS = 2.0;
 
         // @TODO, improve these two functions, they are too simple currently

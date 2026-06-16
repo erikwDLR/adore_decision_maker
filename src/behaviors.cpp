@@ -235,28 +235,6 @@ apply_active_avoidance_speed_profile(
         params );
 }
 
-class PreviousTrajectoryFallbackGuard
-{
-public:
-    explicit PreviousTrajectoryFallbackGuard(
-        planner::TrajectoryPlanner& planner,
-        const std::string& context = "OA stop" )
-        : planner_( planner ),
-          previous_( planner.get_allow_previous_trajectory_fallback() )
-    {
-        planner_.set_allow_previous_trajectory_fallback( false );
-    }
-
-    ~PreviousTrajectoryFallbackGuard()
-    {
-        planner_.set_allow_previous_trajectory_fallback( previous_ );
-    }
-
-private:
-    planner::TrajectoryPlanner& planner_;
-    bool previous_;
-};
-
 void
 set_route_points_from_s_to_zero( map::Route& route, double ego_s )
 {
@@ -434,7 +412,6 @@ make_stop_on_route_behavior(
     dynamics::Trajectory trajectory;
     try
     {
-        PreviousTrajectoryFallbackGuard fallback_guard( planner );
         trajectory =
             planner.plan_route_trajectory(
                 stop_route,
@@ -472,7 +449,6 @@ make_stop_on_route_behavior(
 
         try
         {
-            PreviousTrajectoryFallbackGuard fallback_guard( planner );
             trajectory =
                 planner.plan_route_trajectory(
                     max_braking_route,
@@ -603,7 +579,6 @@ make_stop_on_active_route_behavior(
     dynamics::Trajectory trajectory;
     try
     {
-        PreviousTrajectoryFallbackGuard fallback_guard( planner );
         trajectory =
             planner.plan_route_trajectory( stop_route, ego, traffic_participants );
     }
@@ -662,7 +637,6 @@ make_stop_on_active_route_behavior(
 
         try
         {
-            PreviousTrajectoryFallbackGuard fallback_guard( planner );
             trajectory =
                 planner.plan_route_trajectory(
                     max_braking_route,
@@ -882,9 +856,6 @@ try_dynamic_replan_from_route(
 
     try
     {
-        PreviousTrajectoryFallbackGuard fallback_guard(
-            planner,
-            "dynamic modified-route replan" );
         trajectory =
             planner.plan_route_trajectory_from_s(
                 replan_route_for_planning,
@@ -1044,7 +1015,7 @@ continue_active_avoidance(
     const dynamics::VehicleStateDynamic& vehicle_state_dynamic,
     const map::Route& route_with_signal,
     const dynamics::TrafficParticipantSet& traffic_participants,
-    const std::map<size_t, adore_ros2_msgs::msg::TrafficSignal>& traffic_signals,
+    const dynamics::TrafficSignalSet& traffic_signals,
     const planner::ObstacleAvoidanceParams& params_for_obstacle_avoidance,
     bool use_weather_comfort_settings,
     const dynamics::ComfortSettings& weather_comfort_settings,
@@ -1060,20 +1031,7 @@ continue_active_avoidance(
     // at maneuver start. Re-apply the live traffic-signal state each
     // cycle so a signal that turned red during the maneuver still
     // produces a stop on the route ego is actually following.
-    for( auto& p : active_route.reference_line )
-    {
-        if( std::any_of(
-                traffic_signals.begin(),
-                traffic_signals.end(),
-                [&]( const auto& s )
-                {
-                    return adore::math::distance_2d( s.second, p.second ) < 3.0 &&
-                        s.second.state != adore_ros2_msgs::msg::TrafficSignal::GREEN;
-                } ) )
-        {
-            p.second.max_speed = 0;
-        }
-    }
+    active_route = planner.compute_traffic_light_behavior( vehicle_state_dynamic, active_route, traffic_signals );
 
     auto make_active_stop_behavior =
         [&]( const std::string& label ) -> Behavior
@@ -1336,9 +1294,6 @@ continue_active_avoidance(
         dynamics::Trajectory trajectory;
         try
         {
-            PreviousTrajectoryFallbackGuard fallback_guard(
-                planner,
-                "return from modified route to original route" );
             trajectory =
                 planner.plan_route_trajectory(
                     route_with_signal,
@@ -1381,9 +1336,6 @@ continue_active_avoidance(
         {
             try
             {
-                PreviousTrajectoryFallbackGuard fallback_guard(
-                    planner,
-                    "active modified-route tracking with weather comfort" );
                 trajectory =
                     planner.plan_route_trajectory_with_custom_comfort_settings_from_s(
                         active_route_for_planning,
@@ -1414,9 +1366,6 @@ continue_active_avoidance(
         {
             try
             {
-                PreviousTrajectoryFallbackGuard fallback_guard(
-                    planner,
-                    "active modified-route tracking" );
                 trajectory =
                     planner.plan_route_trajectory_from_s(
                         active_route_for_planning,
@@ -1845,9 +1794,6 @@ plan_obstacle_avoidance_behavior(
 
         try
         {
-            PreviousTrajectoryFallbackGuard fallback_guard(
-                planner,
-                "new modified-route start" );
             trajectory =
                 planner.plan_route_trajectory_from_s(
                     modified_route_for_planning,
@@ -2063,28 +2009,16 @@ plan_obstacle_avoidance_behavior(
             const dynamics::VehicleStateDynamic& vehicle_state_dynamic,
             const map::Route& route,
             const dynamics::TrafficParticipantSet& traffic_participants,
-            const std::map<size_t, adore_ros2_msgs::msg::TrafficSignal>& traffic_signals,
+            const adore_ros2_msgs::msg::TrafficSignals& traffic_signals,
             const std::optional<adore_ros2_msgs::msg::Weather>& weather,
             const planner::ObstacleAvoidanceParams& params_for_obstacle_avoidance,
             planner::ActiveAvoidanceState& active_avoidance_state )
         {
-            // Go through route, and update speed at points based on traffic signal positions.
-            auto route_with_signal = route;
-
-            for( auto& p : route_with_signal.reference_line )
-            {
-                if( std::any_of(
-                        traffic_signals.begin(),
-                        traffic_signals.end(),
-                        [&]( const auto& s )
-                        {
-                            return adore::math::distance_2d( s.second, p.second ) < 3.0 &&
-                                s.second.state != adore_ros2_msgs::msg::TrafficSignal::GREEN;
-                        } ) )
-                {
-                    p.second.max_speed = 0;
-                }
-            }
+            // Convert the live traffic signals and let the planner bake the
+            // resulting stop behaviour into the route once; the modified route
+            // is then threaded through the obstacle-avoidance helpers below.
+            dynamics::TrafficSignalSet traffic_signal_set = dynamics::conversions::to_cpp_type( traffic_signals );
+            auto route_with_signal = planner.compute_traffic_light_behavior( vehicle_state_dynamic, route, traffic_signal_set );
 
             // Determine weather-based speed limitation once.
             bool use_weather_comfort_settings = false;
@@ -2137,7 +2071,7 @@ plan_obstacle_avoidance_behavior(
                     vehicle_state_dynamic,
                     route_with_signal,
                     traffic_participants,
-                    traffic_signals,
+                    traffic_signal_set,
                     params_for_obstacle_avoidance,
                     use_weather_comfort_settings,
                     weather_comfort_settings,

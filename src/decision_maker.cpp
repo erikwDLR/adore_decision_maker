@@ -307,8 +307,8 @@ void DecisionMaker::setup_subscribers()
   subscriber_reference_trajectory = create_subscription<adore_ros2_msgs::msg::Trajectory>( "reference_trajectory", 1,
                                       [this](const adore_ros2_msgs::msg::Trajectory& msg) { latest_reference_trajectory = dynamics::conversions::to_cpp_type(msg); });
 
-  subscriber_traffic_signal = create_subscription<adore_ros2_msgs::msg::TrafficSignal>( "traffic_signals", 1,
-                                      [this](const adore_ros2_msgs::msg::TrafficSignal& msg) { traffic_signals[msg.signal_group_id] = msg; });
+  subscriber_traffic_signals = create_subscription<adore_ros2_msgs::msg::TrafficSignals>( "traffic_signals", 1,
+                                      [this](const adore_ros2_msgs::msg::TrafficSignals& msg) { traffic_signals = msg; });
 
   subscriber_safety_corridor = create_subscription<adore_ros2_msgs::msg::SafetyCorridor>( "safety_corridor", 1,
                                       [this](const adore_ros2_msgs::msg::SafetyCorridor& msg) { latest_safety_corridor = msg; });
