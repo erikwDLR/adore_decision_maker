@@ -57,6 +57,7 @@ endfunction()
 set(CORE_SRC
   src/decision_maker.cpp
   src/behaviors.cpp
+  src/behaviors_obstacle_avoidance.cpp
   src/conditions.cpp
 )
 

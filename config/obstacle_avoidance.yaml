@@ -17,7 +17,7 @@
     obstacle_avoidance.ego_corridor_safety_margin: 0.2
 
     # Real lateral object clearance
-    obstacle_avoidance.side_clearance: 0.8
+    obstacle_avoidance.side_clearance: 1.0
 
     # Longitudinal maneuver geometry
     obstacle_avoidance.front_clearance: 7.0
