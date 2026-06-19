@@ -25,9 +25,6 @@
 namespace adore
 {
 
-namespace
-{
-
 double
 required_traffic_participant_lookahead(
   const planner::ObstacleAvoidanceParams& params )
@@ -61,8 +58,6 @@ required_traffic_participant_lookahead(
       prediction_distance_horizon,
       static_object_horizon + grouping_horizon } );
 }
-
-} // namespace
 
 adore::planner::ObstacleAvoidanceParams
 load_obstacle_avoidance_params( rclcpp::Node& node )
