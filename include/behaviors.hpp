@@ -28,6 +28,7 @@
 
 #include "dynamics/traffic_participant.hpp"
 #include "planning/trajectory_planner.hpp"
+#include "planning/unstructured_planner.hpp"
 
 #include "adore_dynamics_conversions.hpp"
 #include "adore_ros2_msgs/msg/weather.hpp"
@@ -63,6 +64,14 @@ namespace behavior
                                 const std::optional<adore_ros2_msgs::msg::Weather>& weather,
                                 const planner::ObstacleAvoidanceParams& obstacle_avoidance_params,
                                 planner::ActiveAvoidanceState& active_avoidance_state
+    );
+
+    Behavior driving_unstructured(
+                                planner::HybridAStarPlanner& planner,
+                                const dynamics::VehicleStateDynamic& vehicle_state_dynamic,
+                                const map::Route& route,
+                                const dynamics::TrafficParticipantSet& traffic_participants,
+                                const math::Polygon2d& drivable_area 
     );
 
     Behavior driving_mission_following_managed(

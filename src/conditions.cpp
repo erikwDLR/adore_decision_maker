@@ -15,6 +15,8 @@
 #include "adore_ros2_msgs/msg/odd.hpp"
 #include <dynamics/vehicle_state.hpp>
 
+
+
 namespace adore
 {
 namespace conditions
@@ -110,6 +112,18 @@ bool odd_conditions_satisfied(
         return false;
     
     return odd.value().matching;
+}
+
+bool must_drive_unstructured( const std::optional<dynamics::VehicleStateDynamic>& vehicle_state_dynamic, 
+                             const math::Polygon2d& unstructured_drivable_area )
+{
+    if( !vehicle_state_dynamic.has_value() )
+        return false;
+
+    if( vehicle_state_dynamic.value().vx < 0.1 && !unstructured_drivable_area.point_inside( vehicle_state_dynamic.value() ) )
+        return false;
+    
+    return unstructured_drivable_area.points.size() > 2;
 }
 
 } // namespace conditions

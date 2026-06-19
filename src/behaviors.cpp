@@ -32,7 +32,7 @@ namespace adore
 namespace behavior
 {
 
-            Behavior driving_mission(
+    Behavior driving_mission(
             planner::TrajectoryPlanner& planner,
             const dynamics::VehicleStateDynamic& vehicle_state_dynamic,
             const map::Route& route,
@@ -41,104 +41,135 @@ namespace behavior
             const std::optional<adore_ros2_msgs::msg::Weather>& weather,
             const planner::ObstacleAvoidanceParams& params_for_obstacle_avoidance,
             planner::ActiveAvoidanceState& active_avoidance_state )
+    {
+        // Convert the live traffic signals and let the planner bake the
+        // resulting stop behaviour into the route once; the modified route
+        // is then threaded through the obstacle-avoidance helpers below.
+        dynamics::TrafficSignalSet traffic_signal_set = dynamics::conversions::to_cpp_type( traffic_signals );
+        auto route_with_signal = planner.compute_traffic_light_behavior( vehicle_state_dynamic, route, traffic_signal_set );
+
+        // Determine weather-based speed limitation once.
+        bool use_weather_comfort_settings = false;
+        std::string weather_label;
+
+        dynamics::ComfortSettings weather_comfort_settings;
+        weather_comfort_settings.max_speed = 5.5; // 20 km/h
+
+        if( weather.has_value() )
         {
-            // Convert the live traffic signals and let the planner bake the
-            // resulting stop behaviour into the route once; the modified route
-            // is then threaded through the obstacle-avoidance helpers below.
-            dynamics::TrafficSignalSet traffic_signal_set = dynamics::conversions::to_cpp_type( traffic_signals );
-            auto route_with_signal = planner.compute_traffic_light_behavior( vehicle_state_dynamic, route, traffic_signal_set );
-
-            // Determine weather-based speed limitation once.
-            bool use_weather_comfort_settings = false;
-            std::string weather_label;
-
-            dynamics::ComfortSettings weather_comfort_settings;
-            weather_comfort_settings.max_speed = 5.5; // 20 km/h
-
-            if( weather.has_value() )
+            if( weather.value().wind_intensity > 2 )
             {
-                if( weather.value().wind_intensity > 2 )
-                {
-                    use_weather_comfort_settings = true;
-                    weather_label = "carefully due to wind";
-                }
-                else if( weather.value().wetness > 20 )
-                {
-                    use_weather_comfort_settings = true;
-                    weather_label = "carefully due to rain";
-                }
+                use_weather_comfort_settings = true;
+                weather_label = "carefully due to wind";
             }
-
-            // -------------------------------------------------------------------------
-            // OA invariant:
-            // The decision maker never publishes free-space emergency trajectories.
-            // During obstacle avoidance, ego always follows either the original route
-            // or the active modified route.
-            // Braking and waiting are represented by reducing max_speed on the active route.
-            //
-            // Persistent obstacle avoidance maneuver.
-            //
-            // If an OA maneuver is active, keep driving the stored modified route until
-            // the ego vehicle has passed the release point. Do not use disappearing
-            // obstacle detections to end a successful avoidance early. If a new
-            // obstacle conflicts with the active modified route through the generic
-            // route-corridor safety check, first try to replan a new modified route;
-            // fall back to a route speed-profile stop only if no validated replan
-            // exists.
-            //
-            // Opposite-lane monitor conflicts are handled more conservatively: they
-            // do not trigger active replanning. Before commitment, an oncoming
-            // conflict aborts to a controlled stop on the active route. After
-            // commitment, the vehicle keeps the active route and brakes on that route
-            // instead of abruptly abandoning the return path.
-            // -------------------------------------------------------------------------
-            if( active_avoidance_state.active )
+            else if( weather.value().wetness > 20 )
             {
-                return continue_active_avoidance(
-                    planner,
-                    vehicle_state_dynamic,
-                    route_with_signal,
-                    traffic_participants,
-                    traffic_signal_set,
-                    params_for_obstacle_avoidance,
-                    use_weather_comfort_settings,
-                    weather_comfort_settings,
-                    weather_label,
-                    active_avoidance_state );
+                use_weather_comfort_settings = true;
+                weather_label = "carefully due to rain";
             }
+        }
 
-            if( auto ego_lane_behavior =
-                    try_ego_lane_oncoming_stop_behavior(
-                        planner,
-                        route_with_signal,
-                        vehicle_state_dynamic,
-                        traffic_participants,
-                        params_for_obstacle_avoidance );
-                ego_lane_behavior.has_value() )
-            {
-                return ego_lane_behavior.value();
-            }
+        // -------------------------------------------------------------------------
+        // OA invariant:
+        // The decision maker never publishes free-space emergency trajectories.
+        // During obstacle avoidance, ego always follows either the original route
+        // or the active modified route.
+        // Braking and waiting are represented by reducing max_speed on the active route.
+        //
+        // Persistent obstacle avoidance maneuver.
+        //
+        // If an OA maneuver is active, keep driving the stored modified route until
+        // the ego vehicle has passed the release point. Do not use disappearing
+        // obstacle detections to end a successful avoidance early. If a new
+        // obstacle conflicts with the active modified route through the generic
+        // route-corridor safety check, first try to replan a new modified route;
+        // fall back to a route speed-profile stop only if no validated replan
+        // exists.
+        //
+        // Opposite-lane monitor conflicts are handled more conservatively: they
+        // do not trigger active replanning. Before commitment, an oncoming
+        // conflict aborts to a controlled stop on the active route. After
+        // commitment, the vehicle keeps the active route and brakes on that route
+        // instead of abruptly abandoning the return path.
+        // -------------------------------------------------------------------------
+        if( active_avoidance_state.active )
+        {
+            return continue_active_avoidance(
+                planner,
+                vehicle_state_dynamic,
+                route_with_signal,
+                traffic_participants,
+                traffic_signal_set,
+                params_for_obstacle_avoidance,
+                use_weather_comfort_settings,
+                weather_comfort_settings,
+                weather_label,
+                active_avoidance_state );
+        }
 
-            if( use_weather_comfort_settings )
-            {
-                return plan_weather_behavior(
+        if( auto ego_lane_behavior =
+                try_ego_lane_oncoming_stop_behavior(
                     planner,
                     route_with_signal,
                     vehicle_state_dynamic,
                     traffic_participants,
-                    params_for_obstacle_avoidance,
-                    weather_comfort_settings,
-                    weather_label );
-            }
+                    params_for_obstacle_avoidance );
+            ego_lane_behavior.has_value() )
+        {
+            return ego_lane_behavior.value();
+        }
 
-            return plan_obstacle_avoidance_behavior(
+        if( use_weather_comfort_settings )
+        {
+            return plan_weather_behavior(
                 planner,
                 route_with_signal,
                 vehicle_state_dynamic,
                 traffic_participants,
                 params_for_obstacle_avoidance,
-                active_avoidance_state );
+                weather_comfort_settings,
+                weather_label );
         }
+
+        return plan_obstacle_avoidance_behavior(
+            planner,
+            route_with_signal,
+            vehicle_state_dynamic,
+            traffic_participants,
+            params_for_obstacle_avoidance,
+            active_avoidance_state );
+    }
+
+    Behavior driving_unstructured(
+                                planner::HybridAStarPlanner& planner,
+                                const dynamics::VehicleStateDynamic& vehicle_state_dynamic,
+                                const map::Route& route,
+                                const dynamics::TrafficParticipantSet& traffic_participants,
+                                const math::Polygon2d& drivable_area
+                           )
+    {
+        Behavior trajectory_and_signal;
+
+        // planner.set_goal( 605050.90, 5795017.68 );
+        planner.set_goal( route, drivable_area, vehicle_state_dynamic );
+        rclcpp::Clock clock;
+        double now_time = clock.now().seconds();
+        auto                 result             = planner.plan_trajectory( vehicle_state_dynamic, traffic_participants, drivable_area, route );
+        if( !result.trajectory.has_value() )
+        {
+            std::cerr << "no trajectory planned to reach the goal" << std::endl;
+            planner::TrajectoryPlanner emergency_planner;
+            return behavior::emergency( emergency_planner, vehicle_state_dynamic );
+        }
+        dynamics::Trajectory planned_trajectory = result.trajectory.value();
+        planned_trajectory.adjust_start_time( vehicle_state_dynamic.time );
+        planned_trajectory.label = "Unstructured Planner";
+        trajectory_and_signal.modified_route = map::conversions::to_ros_msg( result.modified_route );
+        trajectory_and_signal.trajectory = dynamics::conversions::to_ros_msg( planned_trajectory );
+
+        return trajectory_and_signal;
+    }
+    
 
     Behavior driving_mission_following_managed(
                             planner::TrajectoryPlanner& planner,

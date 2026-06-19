@@ -332,6 +332,9 @@ void DecisionMaker::setup_subscribers()
                                         suggested_remote_operator_trajectory = dynamics::conversions::to_cpp_type(msg); 
                                         suggested_remote_operator_trajectory.value().adjust_start_time( latest_vehicle_state_dynamic.value().time );
                                        });
+
+  subscriber_unstructured_drivable_area = create_subscription<adore_ros2_msgs::msg::CautionZone>( "unstructured_drivable_area", 1,
+                                    [this](const adore_ros2_msgs::msg::CautionZone& msg) {  unstructured_drivable_area = math::conversions::to_cpp_type(msg.polygon); });
 }
 
 void DecisionMaker::setup_publishers()
@@ -373,6 +376,7 @@ behavior::Behavior DecisionMaker::choose_and_plan_driving_behavior()
   bool needs_to_avoid_safety_corridor = conditions::needs_to_avoid_safety_corridor(latest_vehicle_state_dynamic, latest_safety_corridor);
   bool can_drive_managed = conditions::can_drive_managed(latest_vehicle_state_dynamic, time_now, latest_managed_zone, latest_managed_trajectory);
   bool odd_conditions_satisfied = conditions::odd_conditions_satisfied(latest_odd, time_now);
+  bool must_drive_unstructured = conditions::must_drive_unstructured( latest_vehicle_state_dynamic, unstructured_drivable_area );
 
   if (
     has_localization &&
@@ -384,6 +388,19 @@ behavior::Behavior DecisionMaker::choose_and_plan_driving_behavior()
                                 latest_vehicle_state_dynamic.value(),
                                 traffic_participants,
                                 latest_safety_corridor.value()
+    );
+  }
+
+  if ( 
+      must_drive_unstructured &&
+      has_localization )
+  {
+    return behavior::driving_unstructured(
+                                unstructured_planner,
+                                latest_vehicle_state_dynamic.value(),
+                                latest_route.value(),
+                                traffic_participants,
+                                unstructured_drivable_area
     );
   }
 

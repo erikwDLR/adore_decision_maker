@@ -28,6 +28,8 @@
 #include <adore_math/polygon.h>
 #include "std_msgs/msg/bool.hpp"
 #include "planning/obstacle_avoidance.hpp"
+#include "adore_map_conversions.hpp"
+#include "planning/unstructured_planner.hpp"
 
 #include <planning/active_avoidance_state.hpp>
 
@@ -49,6 +51,7 @@ private:
   rclcpp::Subscription<adore_ros2_msgs::msg::TrafficParticipantSet>::SharedPtr subscriber_traffic_participants;
   rclcpp::Subscription<adore_ros2_msgs::msg::TrafficParticipantSet>::SharedPtr subscriber_v2x_traffic_participants;
   rclcpp::Subscription<adore_ros2_msgs::msg::Weather>::SharedPtr subscriber_weather;
+  rclcpp::Subscription<adore_ros2_msgs::msg::CautionZone>::SharedPtr subscriber_unstructured_drivable_area;
 
   // Vehicle subscribers
   rclcpp::Subscription<adore_ros2_msgs::msg::VehicleInfo>::SharedPtr subscriber_vehicle_info;
@@ -75,6 +78,7 @@ private:
 
   // Planning
   planner::TrajectoryPlanner planner; // @TODO Think most of these can be removed
+  planner::HybridAStarPlanner unstructured_planner;
   dynamics::PhysicalVehicleParameters physical_vehicle_parameters;
   std::shared_ptr<dynamics::ComfortSettings> comfort_settings;
 
@@ -94,6 +98,7 @@ private:
 
   dynamics::TrafficParticipantSet traffic_participants;
   std::map<std::string, math::Polygon2d> caution_zones;
+  math::Polygon2d unstructured_drivable_area; // @TODO, make either optional or a hashmap
  
   // DecisionParams               params;
   rclcpp::TimerBase::SharedPtr timer;
