@@ -62,12 +62,45 @@ append_unique_ids( std::vector<int>& target, const std::vector<int>& source )
     }
 }
 
+// Gate for the directional turn-signal suffix. The indicator is derived
+// downstream (trajectory_tracker) purely from the "... left)" / "... right)"
+// label substring. We signal only over the window in which a human driver
+// would: from blinker_lead_distance ahead of where the lateral shift begins
+// (shift_start_s) until the maximum lateral shift is reached (max_shift_s, the
+// avoided obstacle's leading edge). Before that the maneuver is only decided;
+// after it the vehicle has finished moving over and is alongside the obstacle.
+// Each bound is applied only when its geometry is finite, so the gate fails
+// safe to signaling rather than moving over silently.
+bool
+should_indicate_avoidance_direction(
+    double ego_s,
+    double shift_start_s,
+    double max_shift_s,
+    const planner::ObstacleAvoidanceParams& params )
+{
+    if( !std::isfinite( ego_s ) )
+    {
+        return true;
+    }
+    if( std::isfinite( shift_start_s ) &&
+        ego_s < shift_start_s - params.blinker_lead_distance )
+    {
+        return false;
+    }
+    if( std::isfinite( max_shift_s ) && ego_s >= max_shift_s )
+    {
+        return false;
+    }
+    return true;
+}
+
 std::string
 obstacle_avoidance_label(
     planner::ObstacleAvoidanceMode mode,
     bool in_lane,
     double lateral_shift,
-    bool active )
+    bool active,
+    bool indicate_direction )
 {
     const std::string prefix =
         active
@@ -81,16 +114,19 @@ obstacle_avoidance_label(
             : "driving mission (in-lane obstacle avoidance)";
     }
 
-    if( mode == planner::ObstacleAvoidanceMode::OvertakeLeft ||
-        lateral_shift > 1e-6 )
+    if( indicate_direction )
     {
-        return prefix + " left)";
-    }
+        if( mode == planner::ObstacleAvoidanceMode::OvertakeLeft ||
+            lateral_shift > 1e-6 )
+        {
+            return prefix + " left)";
+        }
 
-    if( mode == planner::ObstacleAvoidanceMode::OvertakeRight ||
-        lateral_shift < -1e-6 )
-    {
-        return prefix + " right)";
+        if( mode == planner::ObstacleAvoidanceMode::OvertakeRight ||
+            lateral_shift < -1e-6 )
+        {
+            return prefix + " right)";
+        }
     }
 
     return active
@@ -676,6 +712,77 @@ make_stop_on_active_route_behavior(
     return behavior;
 }
 
+// Brake on the exact route ego is already tracking by zeroing the route-point
+// speeds from ego onward and re-planning with the pinned start-s. Geometry and
+// start-s stay identical to the normal active cycle, so the braking path is
+// continuous with the previous trajectory and there is no lateral jump. This
+// avoids the erratic steering that comes from building a separate stop route
+// and letting the planner re-project ego onto the curved modified route and
+// re-optimize a fresh deceleration profile. Used as the on-route stop for an
+// active maneuver once avoidance is no longer possible.
+Behavior
+make_route_brake_in_place_behavior(
+    planner::TrajectoryPlanner& planner,
+    const map::Route& active_route,
+    const dynamics::VehicleStateDynamic& ego,
+    double pinned_ego_s,
+    const dynamics::TrafficParticipantSet& traffic_participants,
+    const planner::ObstacleAvoidanceParams& params,
+    const std::string& label )
+{
+    double brake_from_s = pinned_ego_s;
+    if( !std::isfinite( brake_from_s ) )
+    {
+        brake_from_s =
+            project_s_on_reference_line(
+                active_route,
+                ego,
+                std::numeric_limits<double>::quiet_NaN() );
+    }
+    if( !std::isfinite( brake_from_s ) && !active_route.reference_line.empty() )
+    {
+        brake_from_s = active_route.reference_line.begin()->first;
+    }
+
+    map::Route brake_route = active_route;
+    ::adore::planner::set_route_points_from_s_to_zero( brake_route, brake_from_s );
+
+    dynamics::Trajectory trajectory;
+    try
+    {
+        trajectory =
+            planner.plan_route_trajectory_from_s(
+                brake_route,
+                ego,
+                traffic_participants,
+                brake_from_s );
+    }
+    catch( const std::exception& e )
+    {
+        RCLCPP_ERROR(
+            rclcpp::get_logger( "Behaviors" ),
+            "[OA][BRAKE_IN_PLACE] planner exception while braking on zeroed route; falling back to emergency hold: %s",
+            e.what() );
+    }
+
+    if( trajectory.states.empty() )
+    {
+        return make_emergency_hold_behavior(
+            active_route,
+            ego,
+            params,
+            "route brake-in-place produced no trajectory: " + label );
+    }
+
+    trajectory.adjust_start_time( ego.time );
+    trajectory.label = label;
+
+    Behavior behavior;
+    behavior.trajectory = dynamics::conversions::to_ros_msg( trajectory );
+    behavior.modified_route = map::conversions::to_ros_msg( brake_route );
+    return behavior;
+}
+
 } // namespace
 
 
@@ -875,13 +982,29 @@ try_dynamic_replan_from_route(
     active_avoidance_state.modified_route =
         replan_route_for_planning;
 
+    // Seed the monotonic-s ratchet on the freshly committed route instead of
+    // leaving it at NaN (start_active_avoidance_state resets it). replan_ego_s
+    // is the ego projection on this same modified route, so next cycle bounds
+    // its projection by odometry from a consistent value rather than latching
+    // an unguarded jump -> no lateral start discontinuity across the reshape.
+    if( std::isfinite( replan_ego_s ) )
+    {
+        active_avoidance_state.last_modified_s = replan_ego_s;
+        active_avoidance_state.last_modified_time = vehicle_state_dynamic.time;
+    }
+
     trajectory.adjust_start_time( vehicle_state_dynamic.time );
     trajectory.label =
         obstacle_avoidance_label(
             replan_result.mode,
             replan_result.in_lane,
             replan_result.lateral_shift,
-            true );
+            true,
+            should_indicate_avoidance_direction(
+                replan_ego_s,
+                replan_result.shift_start_s,
+                replan_result.obstacle_s_min,
+                params_for_obstacle_avoidance ) );
 
     Behavior trajectory_and_signal;
     trajectory_and_signal.trajectory =
@@ -938,30 +1061,44 @@ continue_active_avoidance(
     // produces a stop on the route ego is actually following.
     active_route = planner.compute_traffic_light_behavior( vehicle_state_dynamic, active_route, traffic_signals );
 
+    // Pinned monotonic modified-route s, set once it is computed below. The
+    // active-maneuver stop builders brake on the route ego is already tracking
+    // from this s, so the braking path stays geometrically continuous with the
+    // normal active cycle (no steering jerk). Stays NaN for the few stop paths
+    // that fire before the projection is available; the helper then re-projects.
+    double pinned_active_stop_s = std::numeric_limits<double>::quiet_NaN();
+
     auto make_active_stop_behavior =
         [&]( const std::string& label ) -> Behavior
         {
-            return make_stop_on_route_behavior(
+            return make_route_brake_in_place_behavior(
                 planner,
                 active_route,
                 vehicle_state_dynamic,
+                pinned_active_stop_s,
                 traffic_participants,
                 params_for_obstacle_avoidance,
-                label,
-                "modified" );
+                label );
         };
 
     auto make_active_conflict_stop_behavior =
         [&]( const ::adore::planner::RouteCorridorConflict& conflict ) -> Behavior
         {
-            return make_stop_on_active_route_behavior(
+            RCLCPP_WARN(
+                rclcpp::get_logger( "Behaviors" ),
+                "[OA][ACTIVE_STATE][STOP] braking on active modified_route id=%d type=%s dist=%.2f ttc=%.2f",
+                conflict.participant_id,
+                conflict_type_name( conflict ),
+                conflict.distance_s,
+                conflict.time_to_conflict );
+            return make_route_brake_in_place_behavior(
                 planner,
                 active_route,
-                conflict,
                 vehicle_state_dynamic,
+                pinned_active_stop_s,
                 traffic_participants,
                 params_for_obstacle_avoidance,
-                "modified" );
+                "obstacle avoidance: route brake on active modified_route" );
         };
 
     if( auto monitor_conflict =
@@ -1007,6 +1144,7 @@ continue_active_avoidance(
     }
 
     const double ego_s_modified = ego_s_modified_opt.value();
+    pinned_active_stop_s = ego_s_modified;
 
     const auto active_route_safety =
         ::adore::planner::check_route_corridor_safety(
@@ -1120,18 +1258,7 @@ continue_active_avoidance(
             }
         }
 
-        if( !stop_required )
-        {
-            const auto stop_plan =
-                compute_route_stop_plan(
-                    active_route,
-                    vehicle_state_dynamic,
-                    planner.get_physical_vehicle_parameters(),
-                    active_conflict.value(),
-                    params_for_obstacle_avoidance );
-
-        }
-        else
+        if( stop_required )
         {
             if( is_new_conflict )
             {
@@ -1264,7 +1391,12 @@ continue_active_avoidance(
                     active_avoidance_state.maneuver.mode,
                     active_avoidance_state.in_lane,
                     active_avoidance_state.lateral_shift,
-                    true ) +
+                    true,
+                    should_indicate_avoidance_direction(
+                        ego_s_modified,
+                        active_avoidance_state.shift_start_s,
+                        active_avoidance_state.obstacle_s_min,
+                        params_for_obstacle_avoidance ) ) +
                 " (" + weather_label + ")";
         }
         else
@@ -1293,7 +1425,12 @@ continue_active_avoidance(
                     active_avoidance_state.maneuver.mode,
                     active_avoidance_state.in_lane,
                     active_avoidance_state.lateral_shift,
-                    true );
+                    true,
+                    should_indicate_avoidance_direction(
+                        ego_s_modified,
+                        active_avoidance_state.shift_start_s,
+                        active_avoidance_state.obstacle_s_min,
+                        params_for_obstacle_avoidance ) );
         }
 
         if( trajectory.states.empty() )
@@ -1743,7 +1880,12 @@ plan_obstacle_avoidance_behavior(
                 oa_result.mode,
                 oa_result.in_lane,
                 oa_result.lateral_shift,
-                false );
+                false,
+                should_indicate_avoidance_direction(
+                    ego_s_modified,
+                    oa_result.shift_start_s,
+                    oa_result.obstacle_s_min,
+                    params_for_obstacle_avoidance ) );
 
         Behavior trajectory_and_signal;
         trajectory_and_signal.trajectory =

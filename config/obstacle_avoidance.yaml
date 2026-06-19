@@ -34,6 +34,10 @@
     obstacle_avoidance.enforce_drivable_area: true
     obstacle_avoidance.max_speed_during_avoidance: 2.78
 
+    # Distance ahead of the lateral-shift start at which the turn indicator
+    # switches on (the blinker stays off while the maneuver is only decided).
+    obstacle_avoidance.blinker_lead_distance: 10.0
+
     # Candidate generation
     obstacle_avoidance.validate_shifted_trajectory: true
     obstacle_avoidance.lateral_candidate_extra_steps: 2
