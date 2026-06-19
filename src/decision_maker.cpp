@@ -150,14 +150,14 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
 
   if( params.stop_before_obstacle <= params.front_clearance )
   {
-    const double old_stop_before_obstacle = params.stop_before_obstacle;
+    // const double old_stop_before_obstacle = params.stop_before_obstacle;
     params.stop_before_obstacle =
       params.front_clearance + std::max( 0.0, params.stop_adjustment_offset );
-    RCLCPP_WARN(
-      node.get_logger(),
-      "[OA][CONFIG] stop_before_obstacle must be greater than front_clearance; adjusted from %.3f to %.3f",
-      old_stop_before_obstacle,
-      params.stop_before_obstacle );
+    // RCLCPP_WARN(
+      // node.get_logger(),
+      // "[OA][CONFIG] stop_before_obstacle must be greater than front_clearance; adjusted from %.3f to %.3f",
+      // old_stop_before_obstacle,
+      // params.stop_before_obstacle );
   }
 
   return params;
@@ -221,10 +221,10 @@ void DecisionMaker::setup_subscribers()
 
                                           if( destination_shift > 1.0 )
                                           {
-                                            RCLCPP_WARN(
-                                              get_logger(),
-                                              "[OA] route destination changed by %.2f m while avoidance active; resetting active avoidance state",
-                                              destination_shift );
+                                            // RCLCPP_WARN(
+                                              // get_logger(),
+                                              // "[OA] route destination changed by %.2f m while avoidance active; resetting active avoidance state",
+                                              // destination_shift );
                                             active_avoidance_state.reset();
                                           }
                                         }

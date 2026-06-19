@@ -155,6 +155,6 @@
     obstacle_avoidance.min_motion_speed: 0.05
     # Lower bound for braking deceleration in stop-distance calculations
     obstacle_avoidance.min_braking_deceleration: 0.5
-    obstacle_avoidance.stop_adjustment_offset: 2.0
+    obstacle_avoidance.stop_adjustment_offset: 1.0
     obstacle_avoidance.lateral_shift_penalty_score: 20.0
     obstacle_avoidance.opposite_lane_penalty_score: 40.0
