@@ -57,6 +57,7 @@ endfunction()
 set(CORE_SRC
   src/decision_maker.cpp
   src/behaviors.cpp
+  src/behaviors_obstacle_avoidance.cpp
   src/conditions.cpp
 )
 
@@ -82,6 +83,10 @@ target_link_libraries(${PROJECT_NAME} ${YAML_CPP_LIBRARIES})
 
 install(TARGETS ${PROJECT_NAME}
   DESTINATION lib/${PROJECT_NAME}
+)
+
+install(DIRECTORY config
+  DESTINATION share/${PROJECT_NAME}
 )
 
 # # -------------------------

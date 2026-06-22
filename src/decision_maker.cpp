@@ -18,8 +18,145 @@
 #include "behaviors.hpp"
 #include "conditions.hpp"
 
+#include <adore_math/distance.h>
+
+#include <algorithm>
+
 namespace adore
 {
+
+double
+required_traffic_participant_lookahead(
+  const planner::ObstacleAvoidanceParams& params )
+{
+  const double static_object_horizon =
+    std::max( 0.0, params.max_object_ahead );
+  const double ego_lane_oncoming_horizon =
+    params.ego_lane_oncoming_stop_enabled
+      ? std::max( 0.0, params.ego_lane_oncoming_max_distance )
+      : 0.0;
+  const double modified_route_horizon =
+    params.modified_route_safety_check_enabled
+      ? std::max( 0.0, params.modified_route_max_check_distance )
+      : 0.0;
+  const double prediction_distance_horizon =
+    std::max( 0.0, params.prediction_time_horizon ) *
+    std::max(
+      std::max( 0.0, params.min_oncoming_speed_for_gap_check ),
+      std::max( 0.0, params.min_oncoming_route_speed ) );
+  const double grouping_horizon =
+    std::max(
+      std::max( 0.0, params.cluster_hold_gap_s ),
+      std::max( 0.0, params.shift_hull_gap_s ) ) +
+    std::max( 0.0, params.front_clearance ) +
+    std::max( 0.0, params.rear_clearance );
+
+  return std::max(
+    { static_object_horizon,
+      ego_lane_oncoming_horizon,
+      modified_route_horizon,
+      prediction_distance_horizon,
+      static_object_horizon + grouping_horizon } );
+}
+
+adore::planner::ObstacleAvoidanceParams
+load_obstacle_avoidance_params( rclcpp::Node& node )
+{
+  adore::planner::ObstacleAvoidanceParams params;
+
+  params.enabled = node.declare_parameter<bool>( "obstacle_avoidance.enabled", params.enabled );
+  params.max_object_ahead = node.declare_parameter<double>( "obstacle_avoidance.max_object_ahead", params.max_object_ahead );
+  params.max_static_object_speed = node.declare_parameter<double>( "obstacle_avoidance.max_static_object_speed", params.max_static_object_speed );
+  params.ignored_obstacle_release_speed = node.declare_parameter<double>( "obstacle_avoidance.ignored_obstacle_release_speed", params.ignored_obstacle_release_speed );
+  params.ego_corridor_safety_margin = node.declare_parameter<double>( "obstacle_avoidance.ego_corridor_safety_margin", params.ego_corridor_safety_margin );
+  params.side_clearance = node.declare_parameter<double>( "obstacle_avoidance.side_clearance", params.side_clearance );
+  params.front_clearance = node.declare_parameter<double>( "obstacle_avoidance.front_clearance", params.front_clearance );
+  params.rear_clearance = node.declare_parameter<double>( "obstacle_avoidance.rear_clearance", params.rear_clearance );
+  params.stop_before_obstacle = node.declare_parameter<double>( "obstacle_avoidance.stop_before_obstacle", params.stop_before_obstacle );
+  params.in_lane_shift_enabled = node.declare_parameter<bool>( "obstacle_avoidance.in_lane_shift_enabled", params.in_lane_shift_enabled );
+  params.adjacent_lane_enabled = node.declare_parameter<bool>( "obstacle_avoidance.adjacent_lane_enabled", params.adjacent_lane_enabled );
+  params.opposite_lane_enabled = node.declare_parameter<bool>( "obstacle_avoidance.opposite_lane_enabled", params.opposite_lane_enabled );
+  params.clustering_enabled = node.declare_parameter<bool>( "obstacle_avoidance.clustering_enabled", params.clustering_enabled );
+  params.enforce_drivable_area = node.declare_parameter<bool>( "obstacle_avoidance.enforce_drivable_area", params.enforce_drivable_area );
+  params.max_speed_during_avoidance = node.declare_parameter<double>( "obstacle_avoidance.max_speed_during_avoidance", params.max_speed_during_avoidance );
+  params.blinker_lead_distance = node.declare_parameter<double>( "obstacle_avoidance.blinker_lead_distance", params.blinker_lead_distance );
+  params.validate_shifted_trajectory = node.declare_parameter<bool>( "obstacle_avoidance.validate_shifted_trajectory", params.validate_shifted_trajectory );
+  params.lateral_candidate_extra_steps = node.declare_parameter<int>( "obstacle_avoidance.lateral_candidate_extra_steps", params.lateral_candidate_extra_steps );
+  params.lateral_candidate_extra_step = node.declare_parameter<double>( "obstacle_avoidance.lateral_candidate_extra_step", params.lateral_candidate_extra_step );
+  params.modified_route_safety_check_enabled = node.declare_parameter<bool>( "obstacle_avoidance.modified_route_safety_check_enabled", params.modified_route_safety_check_enabled );
+  params.modified_route_max_check_distance = node.declare_parameter<double>( "obstacle_avoidance.modified_route_max_check_distance", params.modified_route_max_check_distance );
+  params.modified_route_time_horizon = node.declare_parameter<double>( "obstacle_avoidance.modified_route_time_horizon", params.modified_route_time_horizon );
+
+  // Internal/advanced parameters
+  params.max_object_lateral_distance = node.declare_parameter<double>( "obstacle_avoidance.max_object_lateral_distance", params.max_object_lateral_distance );
+  params.min_obstacle_route_overlap = node.declare_parameter<double>( "obstacle_avoidance.min_obstacle_route_overlap", params.min_obstacle_route_overlap );
+  params.min_oncoming_heading_diff = node.declare_parameter<double>( "obstacle_avoidance.min_oncoming_heading_diff", params.min_oncoming_heading_diff );
+  params.stop_time_step = node.declare_parameter<double>( "obstacle_avoidance.stop_time_step", params.stop_time_step );
+  params.prefer_left_shift = node.declare_parameter<bool>( "obstacle_avoidance.prefer_left_shift", params.prefer_left_shift );
+  params.lane_s_overlap_slack = node.declare_parameter<double>( "obstacle_avoidance.lane_s_overlap_slack", params.lane_s_overlap_slack );
+  params.lane_boundary_join_slack = node.declare_parameter<double>( "obstacle_avoidance.lane_boundary_join_slack", params.lane_boundary_join_slack );
+  params.max_projection_distance_from_route = node.declare_parameter<double>( "obstacle_avoidance.max_projection_distance_from_route", params.max_projection_distance_from_route );
+  params.cluster_hold_gap_s = node.declare_parameter<double>( "obstacle_avoidance.cluster_hold_gap_s", params.cluster_hold_gap_s );
+  params.shift_hull_gap_s = node.declare_parameter<double>( "obstacle_avoidance.shift_hull_gap_s", params.shift_hull_gap_s );
+  params.min_alpha_between_hull_obstacles = node.declare_parameter<double>( "obstacle_avoidance.min_alpha_between_hull_obstacles", params.min_alpha_between_hull_obstacles );
+  params.enable_multi_candidate_route_shift = node.declare_parameter<bool>( "obstacle_avoidance.enable_multi_candidate_route_shift", params.enable_multi_candidate_route_shift );
+
+  // Oncoming traffic gap-acceptance parameters
+  params.oncoming_time_margin = node.declare_parameter<double>( "obstacle_avoidance.oncoming_time_margin", params.oncoming_time_margin );
+  params.min_ego_speed_for_gap_check = node.declare_parameter<double>( "obstacle_avoidance.min_ego_speed_for_gap_check", params.min_ego_speed_for_gap_check );
+  params.min_oncoming_speed_for_gap_check = node.declare_parameter<double>( "obstacle_avoidance.min_oncoming_speed_for_gap_check", params.min_oncoming_speed_for_gap_check );
+  params.min_oncoming_route_speed = node.declare_parameter<double>( "obstacle_avoidance.min_oncoming_route_speed", params.min_oncoming_route_speed );
+  params.prediction_time_horizon = node.declare_parameter<double>( "obstacle_avoidance.prediction_time_horizon", params.prediction_time_horizon );
+  params.oncoming_safety_distance_front = node.declare_parameter<double>( "obstacle_avoidance.oncoming_safety_distance_front", params.oncoming_safety_distance_front );
+  params.oncoming_safety_distance_rear = node.declare_parameter<double>( "obstacle_avoidance.oncoming_safety_distance_rear", params.oncoming_safety_distance_rear );
+  params.debug_oncoming_check = node.declare_parameter<bool>( "obstacle_avoidance.debug_oncoming_check", params.debug_oncoming_check );
+
+  // Ego-lane oncoming stop behavior parameters
+  params.ego_lane_oncoming_stop_enabled = node.declare_parameter<bool>( "obstacle_avoidance.ego_lane_oncoming_stop_enabled", params.ego_lane_oncoming_stop_enabled );
+  params.ego_lane_oncoming_max_distance = node.declare_parameter<double>( "obstacle_avoidance.ego_lane_oncoming_max_distance", params.ego_lane_oncoming_max_distance );
+  params.ego_lane_oncoming_time_horizon = node.declare_parameter<double>( "obstacle_avoidance.ego_lane_oncoming_time_horizon", params.ego_lane_oncoming_time_horizon );
+  params.ego_lane_oncoming_min_route_speed = node.declare_parameter<double>( "obstacle_avoidance.ego_lane_oncoming_min_route_speed", params.ego_lane_oncoming_min_route_speed );
+  params.ego_lane_oncoming_lateral_margin = node.declare_parameter<double>( "obstacle_avoidance.ego_lane_oncoming_lateral_margin", params.ego_lane_oncoming_lateral_margin );
+  params.ego_lane_oncoming_stop_distance = node.declare_parameter<double>( "obstacle_avoidance.ego_lane_oncoming_stop_distance", params.ego_lane_oncoming_stop_distance );
+
+  // Active modified-route safety monitor parameters
+  params.modified_route_ttc_margin = node.declare_parameter<double>( "obstacle_avoidance.modified_route_ttc_margin", params.modified_route_ttc_margin );
+  params.modified_route_stop_ttc_threshold = node.declare_parameter<double>( "obstacle_avoidance.modified_route_stop_ttc_threshold", params.modified_route_stop_ttc_threshold );
+  params.modified_route_braking_safety_margin = node.declare_parameter<double>( "obstacle_avoidance.modified_route_braking_safety_margin", params.modified_route_braking_safety_margin );
+  params.min_valid_stop_margin = node.declare_parameter<double>( "obstacle_avoidance.min_valid_stop_margin", params.min_valid_stop_margin );
+
+  // Ghost memory parameters
+  params.ghost_obstacle_hold_time = node.declare_parameter<double>( "obstacle_avoidance.ghost_obstacle_hold_time", params.ghost_obstacle_hold_time );
+  params.ghost_obstacle_release_extra_s = node.declare_parameter<double>( "obstacle_avoidance.ghost_obstacle_release_extra_s", params.ghost_obstacle_release_extra_s );
+  params.ghost_obstacle_match_s_margin = node.declare_parameter<double>( "obstacle_avoidance.ghost_obstacle_match_s_margin", params.ghost_obstacle_match_s_margin );
+  params.ghost_obstacle_match_l_margin = node.declare_parameter<double>( "obstacle_avoidance.ghost_obstacle_match_l_margin", params.ghost_obstacle_match_l_margin );
+  params.ghost_obstacle_max_lifetime = node.declare_parameter<double>( "obstacle_avoidance.ghost_obstacle_max_lifetime", params.ghost_obstacle_max_lifetime );
+  params.ghost_dynamic_max_missing_cycles = node.declare_parameter<int>( "obstacle_avoidance.ghost_dynamic_max_missing_cycles", params.ghost_dynamic_max_missing_cycles );
+
+  // Trajectory and geometry parameters
+  params.min_vehicle_dimension = node.declare_parameter<double>( "obstacle_avoidance.min_vehicle_dimension", params.min_vehicle_dimension );
+  params.route_window_min = node.declare_parameter<double>( "obstacle_avoidance.route_window_min", params.route_window_min );
+  params.trajectory_step_size = node.declare_parameter<double>( "obstacle_avoidance.trajectory_step_size", params.trajectory_step_size );
+  params.min_motion_speed = node.declare_parameter<double>( "obstacle_avoidance.min_motion_speed", params.min_motion_speed );
+  params.min_braking_deceleration = node.declare_parameter<double>( "obstacle_avoidance.min_braking_deceleration", params.min_braking_deceleration );
+  params.stop_adjustment_offset = node.declare_parameter<double>( "obstacle_avoidance.stop_adjustment_offset", params.stop_adjustment_offset );
+  params.lateral_shift_penalty_score = node.declare_parameter<double>( "obstacle_avoidance.lateral_shift_penalty_score", params.lateral_shift_penalty_score );
+  params.opposite_lane_penalty_score = node.declare_parameter<double>( "obstacle_avoidance.opposite_lane_penalty_score", params.opposite_lane_penalty_score );
+
+  if( params.stop_before_obstacle <= params.front_clearance )
+  {
+    // const double old_stop_before_obstacle = params.stop_before_obstacle;
+    params.stop_before_obstacle =
+      params.front_clearance + std::max( 0.0, params.stop_adjustment_offset );
+    // RCLCPP_WARN(
+      // node.get_logger(),
+      // "[OA][CONFIG] stop_before_obstacle must be greater than front_clearance; adjusted from %.3f to %.3f",
+      // old_stop_before_obstacle,
+      // params.stop_before_obstacle );
+  }
+
+  return params;
+}
 
 DecisionMaker::DecisionMaker( const rclcpp::NodeOptions& opts ) :
   rclcpp::Node{ "decision_maker", opts }
@@ -28,6 +165,7 @@ DecisionMaker::DecisionMaker( const rclcpp::NodeOptions& opts ) :
   load_parameters();
   setup_subscribers();
   setup_publishers();
+  obstacle_avoidance_params = load_obstacle_avoidance_params( *this );
 }
 
 void DecisionMaker::load_parameters()
@@ -65,7 +203,29 @@ void DecisionMaker::setup_subscribers()
                                       [this](const adore_ros2_msgs::msg::VehicleStateDynamic& msg) {  latest_vehicle_state_dynamic = dynamics::conversions::to_cpp_type(msg); });
 
   subscriber_route = create_subscription<adore_ros2_msgs::msg::Route>( "route", 1,
-                                      [this](const adore_ros2_msgs::msg::Route& msg) {  latest_route = map::conversions::to_cpp_type(msg); });
+                                      [this](const adore_ros2_msgs::msg::Route& msg) {
+                                        auto new_route = map::conversions::to_cpp_type(msg);
+
+                                        // A new mission invalidates the stored modified route of an
+                                        // active avoidance maneuver; keeping it would make ego follow
+                                        // (or brake on) a route that no longer matches the mission.
+                                        if( active_avoidance_state.active && latest_route.has_value() )
+                                        {
+                                          const double destination_shift =
+                                            adore::math::distance_2d( latest_route->destination, new_route.destination );
+
+                                          if( destination_shift > 1.0 )
+                                          {
+                                            // RCLCPP_WARN(
+                                              // get_logger(),
+                                              // "[OA] route destination changed by %.2f m while avoidance active; resetting active avoidance state",
+                                              // destination_shift );
+                                            active_avoidance_state.reset();
+                                          }
+                                        }
+
+                                        latest_route = new_route;
+                                      });
 
   subscriber_odd = create_subscription<adore_ros2_msgs::msg::Odd>( "odd", 1,
                                       [this](const adore_ros2_msgs::msg::Odd& msg) {  latest_odd = msg; });
@@ -74,9 +234,38 @@ void DecisionMaker::setup_subscribers()
                                       [this](const adore_ros2_msgs::msg::TrafficParticipantSet& msg) 
                                       {  
                                         auto participants = dynamics::conversions::to_cpp_type(msg);
-                                        for( const auto& [id, participant] : participants.participants )
+                                        const double max_distance =
+                                          required_traffic_participant_lookahead(
+                                            obstacle_avoidance_params );
+
+                                        if( latest_vehicle_state_dynamic.has_value() )
                                         {
+                                          auto ego = latest_vehicle_state_dynamic.value();
+
+                                          for( const auto& [id, participant] : participants.participants )
+                                          {
+                                            double dx = participant.state.x - ego.x;
+                                            double dy = participant.state.y - ego.y;
+
+                                            double distance_sq = dx * dx + dy * dy;
+
+                                            if( distance_sq <= max_distance * max_distance )
+                                            {
+                                              traffic_participants.update_traffic_participants( participant );
+                                            }
+                                            else
+                                            {
+                                              traffic_participants.participants.erase( id );
+                                            }
+                                          }
+                                        }
+                                        else
+                                        {
+                                          for( const auto& [id, participant] : participants.participants )
+                                          {
+                                            (void)id;
                                             traffic_participants.update_traffic_participants( participant );
+                                          }
                                         }
 
                                         double max_participant_age = 1.0;
@@ -138,12 +327,16 @@ void DecisionMaker::setup_subscribers()
                                         suggested_remote_operator_trajectory = dynamics::conversions::to_cpp_type(msg); 
                                         suggested_remote_operator_trajectory.value().adjust_start_time( latest_vehicle_state_dynamic.value().time );
                                        });
+
+  subscriber_unstructured_drivable_area = create_subscription<adore_ros2_msgs::msg::CautionZone>( "unstructured_drivable_area", 1,
+                                    [this](const adore_ros2_msgs::msg::CautionZone& msg) {  unstructured_drivable_area = math::conversions::to_cpp_type(msg.polygon); });
 }
 
 void DecisionMaker::setup_publishers()
 {
   publisher_trajectory_decision = create_publisher<adore_ros2_msgs::msg::Trajectory>( "trajectory_decision", 1 );
   publisher_alternative_trajectory_decision = create_publisher<adore_ros2_msgs::msg::Trajectory>( "alternative_trajectory_decision", 1 );
+    publisher_modified_route = create_publisher<adore_ros2_msgs::msg::Route>( "modified_route", 1 );
   publisher_v2x_traffic_participant = create_publisher<adore_ros2_msgs::msg::TrafficParticipant>( "v2x_traffic_participant", 1 );
 }
 
@@ -151,6 +344,10 @@ void DecisionMaker::timer_callback()
 {
   auto behavior = choose_and_plan_driving_behavior();
   publisher_trajectory_decision->publish(behavior.trajectory);
+    if ( behavior.modified_route.has_value() )
+    {
+        publisher_modified_route->publish( behavior.modified_route.value() );
+    }
 
   if ( behavior.alternative_trajectory.has_value() )
   {
@@ -174,6 +371,7 @@ behavior::Behavior DecisionMaker::choose_and_plan_driving_behavior()
   bool needs_to_avoid_safety_corridor = conditions::needs_to_avoid_safety_corridor(latest_vehicle_state_dynamic, latest_safety_corridor);
   bool can_drive_managed = conditions::can_drive_managed(latest_vehicle_state_dynamic, time_now, latest_managed_zone, latest_managed_trajectory);
   bool odd_conditions_satisfied = conditions::odd_conditions_satisfied(latest_odd, time_now);
+  bool must_drive_unstructured = conditions::must_drive_unstructured( latest_vehicle_state_dynamic, unstructured_drivable_area );
 
   if (
     has_localization &&
@@ -185,6 +383,19 @@ behavior::Behavior DecisionMaker::choose_and_plan_driving_behavior()
                                 latest_vehicle_state_dynamic.value(),
                                 traffic_participants,
                                 latest_safety_corridor.value()
+    );
+  }
+
+  if ( 
+      must_drive_unstructured &&
+      has_localization )
+  {
+    return behavior::driving_unstructured(
+                                unstructured_planner,
+                                latest_vehicle_state_dynamic.value(),
+                                latest_route.value(),
+                                traffic_participants,
+                                unstructured_drivable_area
     );
   }
 
@@ -232,7 +443,9 @@ behavior::Behavior DecisionMaker::choose_and_plan_driving_behavior()
                                 latest_route.value(),
                                 traffic_participants,
                                 traffic_signals,
-                                latest_weather
+                                latest_weather,
+                                obstacle_avoidance_params,
+                                active_avoidance_state
                               );
   }
 

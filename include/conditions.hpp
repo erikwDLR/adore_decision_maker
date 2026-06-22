@@ -37,6 +37,7 @@ namespace adore
         bool needs_to_avoid_safety_corridor( const std::optional<dynamics::VehicleStateDynamic>& vehicle_state_dynamic, const std::optional<adore_ros2_msgs::msg::SafetyCorridor>& safety_corridor );
         bool can_drive_managed( const std::optional<dynamics::VehicleStateDynamic>& vehicle_state_dynamic, const double& time_now, const std::optional<math::Polygon2d>& managed_zone, const std::optional<dynamics::Trajectory>& managed_trajectory);
         bool odd_conditions_satisfied( const std::optional<adore_ros2_msgs::msg::Odd>& odd, const double& time_now );
+        bool must_drive_unstructured( const std::optional<dynamics::VehicleStateDynamic>& vehicle_state_dynamic, const math::Polygon2d& unstructured_drivable_area );
 
     } // namespace conditions
 } // namespace adore
