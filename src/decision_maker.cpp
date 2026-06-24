@@ -193,6 +193,10 @@ void DecisionMaker::load_parameters()
 
   auto vehicle_model    = std::make_shared<dynamics::PhysicalVehicleModel>( vehicle_model_file, false );
   auto comfort_settings = dynamics::ComfortSettings(); // default value comfort settings
+  // Per-vehicle cruise cap: allows scenarios to set a vehicle's max speed (e.g. a
+  // slow oncoming vehicle). Defaults to the ComfortSettings default so existing
+  // launches are unchanged.
+  comfort_settings.max_speed = declare_parameter<double>( "max_speed", comfort_settings.max_speed );
 
   planner.set_vehicle_parameters( vehicle_model->params );
   planner.set_comfort_settings( comfort_settings );
