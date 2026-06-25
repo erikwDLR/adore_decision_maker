@@ -84,6 +84,7 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
   params.clustering_enabled = node.declare_parameter<bool>( "obstacle_avoidance.clustering_enabled", params.clustering_enabled );
   params.enforce_drivable_area = node.declare_parameter<bool>( "obstacle_avoidance.enforce_drivable_area", params.enforce_drivable_area );
   params.max_speed_during_avoidance = node.declare_parameter<double>( "obstacle_avoidance.max_speed_during_avoidance", params.max_speed_during_avoidance );
+  params.acceleration_during_avoidance = node.declare_parameter<double>( "obstacle_avoidance.acceleration_during_avoidance", params.acceleration_during_avoidance );
   params.blinker_lead_distance = node.declare_parameter<double>( "obstacle_avoidance.blinker_lead_distance", params.blinker_lead_distance );
   params.validate_shifted_trajectory = node.declare_parameter<bool>( "obstacle_avoidance.validate_shifted_trajectory", params.validate_shifted_trajectory );
   params.lateral_candidate_extra_steps = node.declare_parameter<int>( "obstacle_avoidance.lateral_candidate_extra_steps", params.lateral_candidate_extra_steps );
