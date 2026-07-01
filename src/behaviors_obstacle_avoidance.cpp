@@ -130,6 +130,29 @@ using planner::compute_route_stop_plan;
 using planner::should_stop_for_active_conflict;
 using planner::compute_monotonic_ego_s_modified;
 
+double
+ego_front_offset( const dynamics::PhysicalVehicleParameters& vehicle_params )
+{
+    return vehicle_params.wheelbase + vehicle_params.front_axle_to_front_border;
+}
+
+// Route-s at which ego's front comes to rest stop_before_obstacle ahead of an
+// obstacle/conflict reference edge. Non-finite reference_s -> NaN.
+double
+stop_s_before_obstacle(
+    double reference_s,
+    const planner::ObstacleAvoidanceParams& params,
+    const dynamics::PhysicalVehicleParameters& vehicle_params )
+{
+    if( !std::isfinite( reference_s ) )
+    {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    return reference_s
+         - std::max( 0.0, params.stop_before_obstacle )
+         - ego_front_offset( vehicle_params );
+}
+
 map::Route
 apply_route_max_speed_cap( const map::Route& route, double max_speed )
 {
@@ -944,8 +967,6 @@ continue_active_avoidance(
             // Stop point before the conflict: brake gently if it is far enough,
             // otherwise apply_brake_envelope falls back to maximum braking.
             const auto vehicle_params = planner.get_physical_vehicle_parameters();
-            const double ego_front_offset =
-                vehicle_params.wheelbase + vehicle_params.front_axle_to_front_border;
 
             // For an oncoming conflict, wait pulled up at the avoided obstacle
             // (still in the ego lane) - exactly like the opposite-lane-disabled
@@ -962,11 +983,8 @@ continue_active_avoidance(
                     : conflict.object_s_min;
 
             const double conflict_stop_s =
-                std::isfinite( reference_s )
-                    ? reference_s -
-                      std::max( 0.0, params_for_obstacle_avoidance.stop_before_obstacle ) -
-                      ego_front_offset
-                    : std::numeric_limits<double>::quiet_NaN();
+                stop_s_before_obstacle(
+                    reference_s, params_for_obstacle_avoidance, vehicle_params );
 
             return make_route_brake_in_place_behavior(
                 planner,
@@ -1099,12 +1117,7 @@ continue_active_avoidance(
             return make_active_conflict_stop_behavior( held_conflict );
         }
 
-        active_avoidance_state.oncoming_wait_active = false;
-        active_avoidance_state.oncoming_wait_participant_id = -1;
-        active_avoidance_state.oncoming_wait_release_s =
-            std::numeric_limits<double>::quiet_NaN();
-        active_avoidance_state.oncoming_wait_last_seen_time =
-            std::numeric_limits<double>::quiet_NaN();
+        active_avoidance_state.clear_oncoming_wait();
     }
 
     if( auto monitor_conflict =
@@ -1621,13 +1634,11 @@ plan_obstacle_avoidance_behavior(
                 far_v0 * far_v0 /
                 ( 2.0 * ::adore::planner::planned_braking_deceleration(
                             far_vehicle_params, params_for_obstacle_avoidance ) );
-            const double far_ego_front_offset =
-                far_vehicle_params.wheelbase +
-                far_vehicle_params.front_axle_to_front_border;
             const double far_stop_s =
-                oa_result.obstacle_s_min -
-                std::max( 0.0, params_for_obstacle_avoidance.stop_before_obstacle ) -
-                far_ego_front_offset;
+                stop_s_before_obstacle(
+                    oa_result.obstacle_s_min,
+                    params_for_obstacle_avoidance,
+                    far_vehicle_params );
             const bool obstacle_still_far =
                 !oa_result.trajectory.states.empty() &&
                 std::isfinite( far_ego_s ) &&
