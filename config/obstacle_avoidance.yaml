@@ -7,7 +7,7 @@
     obstacle_avoidance.enabled: true
 
     # Object detection
-    obstacle_avoidance.max_object_ahead: 60.0
+    obstacle_avoidance.max_object_ahead: 100.0
     obstacle_avoidance.max_static_object_speed: 0.5
 
     # Speed hysteresis before an already-avoided obstacle stops being ignored

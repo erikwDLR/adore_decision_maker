@@ -166,10 +166,7 @@ namespace behavior
     {
         Behavior trajectory_and_signal;
 
-        // planner.set_goal( 605050.90, 5795017.68 );
         planner.set_goal( route, drivable_area, vehicle_state_dynamic );
-        rclcpp::Clock clock;
-        double now_time = clock.now().seconds();
         auto                 result             = planner.plan_trajectory( vehicle_state_dynamic, traffic_participants, drivable_area, route );
         if( !result.trajectory.has_value() )
         {
@@ -188,10 +185,10 @@ namespace behavior
     
 
     Behavior driving_mission_following_managed(
-                            planner::TrajectoryPlanner& planner,
-                            const dynamics::VehicleStateDynamic& vehicle_state_dynamic,  
-                            const dynamics::Trajectory& managed_trajectory, 
-                            const math::Polygon2d managed_zone
+                            [[maybe_unused]] planner::TrajectoryPlanner& planner,
+                            [[maybe_unused]] const dynamics::VehicleStateDynamic& vehicle_state_dynamic,
+                            const dynamics::Trajectory& managed_trajectory,
+                            [[maybe_unused]] const math::Polygon2d managed_zone
     )
     {
         Behavior trajectory_and_signals;
@@ -202,9 +199,9 @@ namespace behavior
     }
 
     Behavior waiting_for_mission(
-                                planner::TrajectoryPlanner& planner,
-                                const dynamics::VehicleStateDynamic& vehicle_state_dynamic,  
-                                const dynamics::TrafficParticipantSet& traffic_participants 
+                                [[maybe_unused]] planner::TrajectoryPlanner& planner,
+                                const dynamics::VehicleStateDynamic& vehicle_state_dynamic,
+                                [[maybe_unused]] const dynamics::TrafficParticipantSet& traffic_participants
                             )
     {
         dynamics::Trajectory trajectory;
@@ -352,8 +349,8 @@ namespace behavior
     }
 
     Behavior emergency(
-                            planner::TrajectoryPlanner& planner,
-                            const std::optional<dynamics::VehicleStateDynamic>& vehicle_state_dynamic  
+                            [[maybe_unused]] planner::TrajectoryPlanner& planner,
+                            const std::optional<dynamics::VehicleStateDynamic>& vehicle_state_dynamic
     )
     {
         dynamics::Trajectory emergency_stop_trajectory;
