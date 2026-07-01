@@ -55,9 +55,8 @@
     # Plausibility filter for bad route projections / unrelated objects
     obstacle_avoidance.max_object_lateral_distance: 8.0
 
-    obstacle_avoidance.min_obstacle_route_overlap: 0.5
+    obstacle_avoidance.min_object_ahead: 0.5
     obstacle_avoidance.min_oncoming_heading_diff: 2.35
-    obstacle_avoidance.stop_time_step: 0.1
 
     # If left and right are equally good, prefer left (right-hand traffic overtaking)
     obstacle_avoidance.prefer_left_shift: true
@@ -85,7 +84,7 @@
     # --------------------------------------------------------------------------
 
     # Minimum time margin before an oncoming vehicle arrives at conflict area
-    obstacle_avoidance.oncoming_time_margin: 2.0
+    obstacle_avoidance.oncoming_time_margin: 1.0
 
     # Minimum speed for ego vehicle when computing clear time
     obstacle_avoidance.min_ego_speed_for_gap_check: 1.0
@@ -103,15 +102,12 @@
     obstacle_avoidance.oncoming_safety_distance_front: 10.0
     obstacle_avoidance.oncoming_safety_distance_rear: 5.0
 
-    # Enable detailed debug logging for oncoming conflict checks
-    obstacle_avoidance.debug_oncoming_check: false
-
     # --------------------------------------------------------------------------
     # Ego-lane oncoming stop behavior
     # --------------------------------------------------------------------------
 
     # Enable defensive stop for oncoming participants in ego lane
-    obstacle_avoidance.ego_lane_oncoming_stop_enabled: true
+    obstacle_avoidance.ego_lane_oncoming_stop_enabled: false
 
     # Maximum longitudinal distance ahead of ego for oncoming participant
     obstacle_avoidance.ego_lane_oncoming_max_distance: 80.0
@@ -151,9 +147,11 @@
 
     obstacle_avoidance.min_vehicle_dimension: 0.1
     obstacle_avoidance.route_window_min: 20.0
-    obstacle_avoidance.trajectory_step_size: 0.05
     obstacle_avoidance.min_motion_speed: 0.05
-    # Lower bound for braking deceleration in stop-distance calculations
+    # Nominal positive deceleration used for planned OA speed/stop profiles.
+    # Keep below abs(vehicle acceleration_min) to leave reserve for max braking.
+    obstacle_avoidance.planned_braking_deceleration: 1.0
+    # Lower bound for braking deceleration in stop-distance calculations.
     obstacle_avoidance.min_braking_deceleration: 0.5
     obstacle_avoidance.stop_adjustment_offset: 1.0
     obstacle_avoidance.lateral_shift_penalty_score: 20.0

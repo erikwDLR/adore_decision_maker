@@ -48,6 +48,22 @@ namespace behavior
         dynamics::TrafficSignalSet traffic_signal_set = dynamics::conversions::to_cpp_type( traffic_signals );
         auto route_with_signal = planner.compute_traffic_light_behavior( vehicle_state_dynamic, route, traffic_signal_set );
 
+        // Hard OA bypass: disabling obstacle avoidance must also cancel a
+        // previously active maneuver and skip every OA monitor, stop-hold and
+        // weather/OA dispatch below. The disabled branch plans only the normal
+        // driving mission on the original route (including traffic signals).
+        if( !params_for_obstacle_avoidance.enabled )
+        {
+            active_avoidance_state.reset();
+            return plan_obstacle_avoidance_behavior(
+                planner,
+                route_with_signal,
+                vehicle_state_dynamic,
+                traffic_participants,
+                params_for_obstacle_avoidance,
+                active_avoidance_state );
+        }
+
         // Determine weather-based speed limitation once.
         bool use_weather_comfort_settings = false;
         std::string weather_label;
