@@ -715,6 +715,7 @@ check_opposite_lane_monitor(
     const planner::ObstacleAvoidanceManeuver& maneuver,
     double conflict_hint_s,
     const planner::ObstacleAvoidanceParams& params,
+    const dynamics::PhysicalVehicleParameters& vehicle_params,
     const dynamics::Trajectory* planned_trajectory )
 {
     if( !( maneuver.active && maneuver.uses_opposite_lane ) )
@@ -728,6 +729,7 @@ check_opposite_lane_monitor(
             ego,
             traffic_participants,
             maneuver,
+            vehicle_params,
             params,
             planned_trajectory );
 
@@ -1043,6 +1045,24 @@ continue_active_avoidance(
             {
                 release_wait = true;
             }
+
+            // Also release if the participant has come to a stop and no longer
+            // reaches into the driven corridor (e.g. it pulled aside to let ego
+            // through). The monitor's corridor gate is bypassed while latched, so
+            // mirror it here: a stopped participant that leaves side clearance to the
+            // route-centered ego corridor is not blocking and the hold can end even
+            // though it never crossed the release edge longitudinally.
+            if( !release_wait &&
+                std::fabs( wait_participant_it->second.state.vx ) <=
+                    params_for_obstacle_avoidance.max_static_object_speed &&
+                ::adore::planner::participant_has_side_clearance_to_route_corridor(
+                    active_route,
+                    wait_participant_it->second,
+                    planner.get_physical_vehicle_parameters(),
+                    params_for_obstacle_avoidance ) )
+            {
+                release_wait = true;
+            }
         }
         else
         {
@@ -1095,6 +1115,7 @@ continue_active_avoidance(
                 active_avoidance_state.maneuver,
                 active_avoidance_state.last_modified_s,
                 params_for_obstacle_avoidance,
+                planner.get_physical_vehicle_parameters(),
                 nullptr );
         monitor_conflict.has_value() )
     {
@@ -1350,6 +1371,7 @@ continue_active_avoidance(
                     active_avoidance_state.maneuver,
                     ego_s_modified,
                     params_for_obstacle_avoidance,
+                    planner.get_physical_vehicle_parameters(),
                     &trajectory );
             monitor_conflict.has_value() )
         {
