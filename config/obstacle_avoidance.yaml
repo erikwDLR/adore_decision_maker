@@ -14,7 +14,7 @@
     obstacle_avoidance.ignored_obstacle_release_speed: 1.5
 
     # Ego-route relevance corridor
-    obstacle_avoidance.ego_corridor_safety_margin: 0.2
+    obstacle_avoidance.ego_corridor_safety_margin: 0.3
 
     # Real lateral object clearance
     obstacle_avoidance.side_clearance: 1.0
@@ -99,8 +99,8 @@
     obstacle_avoidance.prediction_time_horizon: 15.0
 
     # Safety distances during oncoming conflict
-    obstacle_avoidance.oncoming_safety_distance_front: 10.0
-    obstacle_avoidance.oncoming_safety_distance_rear: 5.0
+    obstacle_avoidance.oncoming_safety_distance_front: 2.0
+    obstacle_avoidance.oncoming_safety_distance_rear: 2.0
 
     # --------------------------------------------------------------------------
     # Ego-lane oncoming stop behavior
@@ -134,11 +134,14 @@
     obstacle_avoidance.min_valid_stop_margin: 1.0
 
     # Ghost memory for obstacles that were relevant during an active avoidance state
+    # Master switch: false = no memory/hold for disappeared participants (no ghosting)
+    obstacle_avoidance.ghost_memory_enabled: false
     obstacle_avoidance.ghost_obstacle_hold_time: 2.0
     obstacle_avoidance.ghost_obstacle_release_extra_s: 5.0
     obstacle_avoidance.ghost_obstacle_match_s_margin: 3.0
     obstacle_avoidance.ghost_obstacle_match_l_margin: 1.0
-    obstacle_avoidance.ghost_obstacle_max_lifetime: 10.0
+    # Hard limit for every ghost; passing its release position ends it earlier
+    obstacle_avoidance.ghost_obstacle_max_lifetime: 5.0
     obstacle_avoidance.ghost_dynamic_max_missing_cycles: 5
 
     # --------------------------------------------------------------------------

@@ -94,13 +94,13 @@ namespace behavior
         //
         // Persistent obstacle avoidance maneuver.
         //
-        // If an OA maneuver is active, keep driving the stored modified route until
-        // the ego vehicle has passed the release point. Do not use disappearing
-        // obstacle detections to end a successful avoidance early. If a new
-        // obstacle conflicts with the active modified route through the generic
-        // route-corridor safety check, first try to replan a new modified route;
-        // fall back to a route speed-profile stop only if no validated replan
-        // exists.
+        // If an OA maneuver is active and ghost memory is enabled, keep driving the
+        // stored modified route until the ego vehicle has passed the release point.
+        // With ghost memory disabled, a vanished maneuver obstacle instead returns
+        // immediately to fresh planning from the mission route. If a new obstacle
+        // conflicts with the active modified route through the generic route-
+        // corridor safety check, first try to replan a new modified route; fall
+        // back to a route speed-profile stop only if no validated replan exists.
         //
         // Opposite-lane monitor conflicts are handled more conservatively: they
         // do not trigger active replanning. Before commitment, an oncoming

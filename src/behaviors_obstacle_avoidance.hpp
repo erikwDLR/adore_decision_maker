@@ -30,9 +30,10 @@ namespace behavior
 // (hold/stop behavior builders, ghost-memory orchestration, monitors) are
 // file-local in behaviors_obstacle_avoidance.cpp.
 
-// Active obstacle-avoidance maneuver handling: keep following the stored
-// modified route, monitor it, replan or stop on new/oncoming conflicts, and
-// release back to the mission route once the obstacle is passed.
+// Active obstacle-avoidance maneuver handling: follow and monitor the stored
+// modified route, replan or stop on new/oncoming conflicts, and return to fresh
+// mission-route planning after passing the obstacle or after losing it while
+// ghost memory is disabled.
 Behavior
 continue_active_avoidance(
     planner::TrajectoryPlanner& planner,
