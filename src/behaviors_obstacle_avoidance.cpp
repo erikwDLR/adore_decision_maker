@@ -120,6 +120,7 @@ obstacle_avoidance_label(
 // so existing unqualified call sites keep working.
 using planner::project_s_on_reference_line;
 using planner::start_active_avoidance_state;
+using planner::update_tracked_obstacle_envelopes;
 using planner::make_oncoming_monitor_conflict;
 using planner::static_or_slow_conflict_has_side_clearance;
 using planner::compute_route_stop_plan;
@@ -781,6 +782,58 @@ check_opposite_lane_monitor(
     return std::nullopt;
 }
 
+// Copy of the participant set with each maneuver obstacle grown to the maximum
+// object-local dimensions ever observed for it (ActiveAvoidanceState.tracked_-
+// obstacles). Planning and corridor checks projected the current pose with these
+// max dimensions, so an obstacle that turns out larger than first perceived is
+// avoided at its true size instead of the stale initial footprint. Pose is left
+// untouched; only body_length/body_width are enlarged (never shrunk).
+dynamics::TrafficParticipantSet
+make_max_hull_inflated_participants(
+    const dynamics::TrafficParticipantSet& traffic_participants,
+    const planner::ActiveAvoidanceState& active_avoidance_state )
+{
+    dynamics::TrafficParticipantSet inflated = traffic_participants;
+    for( const auto& envelope : active_avoidance_state.tracked_obstacles )
+    {
+        const auto participant_it =
+            inflated.participants.find( envelope.participant_id );
+        if( participant_it == inflated.participants.end() )
+        {
+            continue;
+        }
+        participant_it->second.physical_parameters.body_length =
+            std::max( participant_it->second.physical_parameters.body_length,
+                      envelope.max_length );
+        participant_it->second.physical_parameters.body_width =
+            std::max( participant_it->second.physical_parameters.body_width,
+                      envelope.max_width );
+    }
+    return inflated;
+}
+
+// True if a corridor conflict is caused by one of the active maneuver's own
+// obstacles (as opposed to a newly appeared participant).
+bool
+conflict_is_maneuver_obstacle(
+    const planner::RouteCorridorConflict& conflict,
+    const planner::ActiveAvoidanceState& active_avoidance_state )
+{
+    const int id = conflict.participant_id;
+    if( id < 0 )
+    {
+        return false;
+    }
+    if( std::find(
+            active_avoidance_state.obstacle_ids.begin(),
+            active_avoidance_state.obstacle_ids.end(),
+            id ) != active_avoidance_state.obstacle_ids.end() )
+    {
+        return true;
+    }
+    return id == active_avoidance_state.obstacle_id;
+}
+
 // Try to reshape the active maneuver from a base route (active modified or
 // mission). On success starts/refreshes the avoidance state and returns the
 // resulting Behavior; nullopt means keep the previous active route this cycle.
@@ -1244,6 +1297,59 @@ continue_active_avoidance(
         if( stop_required )
         {
             return make_active_conflict_stop_behavior( active_conflict.value() );
+        }
+    }
+
+    // Growth monitor (committed maneuver only). Perception refines an obstacle's
+    // size as ego approaches, so the maneuver obstacle can turn out larger than
+    // when the shift was planned. Latch its maximum object-local dimensions and
+    // rebuild the participant set at that max size. If the max-hull now intrudes
+    // into the active-route corridor - grown wider into the shifted path, or
+    // longer so its rear reaches past the ramp-down - the committed shift no
+    // longer clears it: replan a larger avoidance from the mission route (at the
+    // max size, not ignoring the obstacle) so ego holds/extends the shift and
+    // continues the avoidance. If no valid larger avoidance exists, brake on the
+    // active route (never cut back to the original line alongside the obstacle).
+    if( active_avoidance_state.committed )
+    {
+        update_tracked_obstacle_envelopes(
+            active_avoidance_state,
+            traffic_participants,
+            params_for_obstacle_avoidance );
+
+        const auto inflated_participants =
+            make_max_hull_inflated_participants(
+                traffic_participants,
+                active_avoidance_state );
+
+        const auto growth_safety =
+            ::adore::planner::check_route_corridor_safety(
+                active_route,
+                vehicle_state_dynamic,
+                inflated_participants,
+                planner.get_physical_vehicle_parameters(),
+                params_for_obstacle_avoidance );
+
+        if( growth_safety.has_conflict &&
+            conflict_is_maneuver_obstacle(
+                growth_safety.conflict,
+                active_avoidance_state ) )
+        {
+            if( auto replanned_behavior =
+                    try_dynamic_replan_from_route(
+                        planner,
+                        route_with_signal,
+                        ego_s_original,
+                        vehicle_state_dynamic,
+                        inflated_participants,
+                        params_for_obstacle_avoidance,
+                        active_avoidance_state );
+                replanned_behavior.has_value() )
+            {
+                return replanned_behavior.value();
+            }
+
+            return make_active_conflict_stop_behavior( growth_safety.conflict );
         }
     }
 
