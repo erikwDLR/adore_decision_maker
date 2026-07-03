@@ -860,6 +860,20 @@ try_dynamic_replan_from_route(
     if( !replan_result.success ||
         !replan_result.has_maneuver_bounds )
     {
+        // Surface why the reshape produced no maneuver (drivable-area /
+        // validation / projection / oncoming ...). Otherwise this failure is
+        // invisible: the caller just falls through to a route brake. Diagnostic
+        // for the late-appearing second-obstacle case where ego brakes instead
+        // of extending the avoidance.
+        static rclcpp::Clock replan_fail_log_clock{ RCL_STEADY_TIME };
+        RCLCPP_INFO_THROTTLE(
+            rclcpp::get_logger( "Behaviors" ),
+            replan_fail_log_clock,
+            1000,
+            "[OA][REPLAN_FAIL] no maneuver from base route (hint_s=%.1f, mode=%d): %s",
+            projection_hint_s,
+            static_cast<int>( replan_result.mode ),
+            replan_result.reason.c_str() );
         return std::nullopt;
     }
 
