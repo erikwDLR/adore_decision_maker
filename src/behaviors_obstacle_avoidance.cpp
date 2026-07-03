@@ -1248,12 +1248,14 @@ continue_active_avoidance(
     }
 
     // Before ego has committed to the shift (it has not yet physically begun the
-    // lateral offset), a vanished or no-longer-tracked maneuver obstacle must not
-    // pin ego to the modified route. Re-enter the normal mission-route planning
-    // flow: a fresh OA calculation for all currently visible participants returns
-    // to the mission route when no replacement maneuver is needed. Once committed,
-    // the maneuver is driven to its release point regardless of a lost detection,
-    // so ego never snaps back to the original line mid-shift.
+    // lateral offset), the maneuver must not pin ego to the modified route once
+    // its reason is gone. Re-enter the normal mission-route planning flow when,
+    // pre-commit, either the maneuver obstacle is no longer tracked, or the
+    // original mission route is now clear again (the obstacle moved out of its
+    // corridor). A fresh OA calculation then returns to the mission route when no
+    // replacement maneuver is needed. Once committed, the maneuver is driven to
+    // its release point regardless of a lost detection or a freed lane, so ego
+    // never snaps back to the original line mid-shift.
     const bool tracked_maneuver_obstacle_visible =
         !active_avoidance_state.obstacle_ids.empty()
             ? std::any_of(
@@ -1269,9 +1271,31 @@ continue_active_avoidance(
                       active_avoidance_state.obstacle_id ) !=
                       traffic_participants.participants.end();
 
+    bool return_to_mission_pre_commit = false;
     if( !active_avoidance_state.committed &&
-        !tracked_maneuver_obstacle_visible &&
         !active_conflict.has_value() )
+    {
+        if( !tracked_maneuver_obstacle_visible )
+        {
+            return_to_mission_pre_commit = true;
+        }
+        else
+        {
+            // Obstacle still tracked: return only if the original mission route is
+            // now actually free (it moved out of the corridor), so ego stops
+            // swerving for an obstacle that no longer blocks its lane.
+            const auto original_route_safety =
+                ::adore::planner::check_route_corridor_safety(
+                    route_with_signal,
+                    vehicle_state_dynamic,
+                    traffic_participants,
+                    planner.get_physical_vehicle_parameters(),
+                    params_for_obstacle_avoidance );
+            return_to_mission_pre_commit = !original_route_safety.has_conflict;
+        }
+    }
+
+    if( return_to_mission_pre_commit )
     {
         active_avoidance_state.reset();
 
