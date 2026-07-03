@@ -27,13 +27,13 @@ namespace behavior
 
 // Obstacle-avoidance behavior dispatch, factored out of behaviors.cpp.
 // driving_mission() dispatches to these; all of their internal helpers
-// (hold/stop behavior builders, ghost-memory orchestration, monitors) are
-// file-local in behaviors_obstacle_avoidance.cpp.
+// (hold/stop behavior builders, monitors) are file-local in
+// behaviors_obstacle_avoidance.cpp.
 
 // Active obstacle-avoidance maneuver handling: follow and monitor the stored
 // modified route, replan or stop on new/oncoming conflicts, and return to fresh
-// mission-route planning after passing the obstacle or after losing it while
-// ghost memory is disabled.
+// mission-route planning after passing the obstacle, or (before the shift is
+// committed) after losing the maneuver obstacle.
 Behavior
 continue_active_avoidance(
     planner::TrajectoryPlanner& planner,

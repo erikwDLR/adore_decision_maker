@@ -122,15 +122,6 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
   params.modified_route_braking_safety_margin = node.declare_parameter<double>( "obstacle_avoidance.modified_route_braking_safety_margin", params.modified_route_braking_safety_margin );
   params.min_valid_stop_margin = node.declare_parameter<double>( "obstacle_avoidance.min_valid_stop_margin", params.min_valid_stop_margin );
 
-  // Ghost memory parameters
-  params.ghost_memory_enabled = node.declare_parameter<bool>( "obstacle_avoidance.ghost_memory_enabled", params.ghost_memory_enabled );
-  params.ghost_obstacle_hold_time = node.declare_parameter<double>( "obstacle_avoidance.ghost_obstacle_hold_time", params.ghost_obstacle_hold_time );
-  params.ghost_obstacle_release_extra_s = node.declare_parameter<double>( "obstacle_avoidance.ghost_obstacle_release_extra_s", params.ghost_obstacle_release_extra_s );
-  params.ghost_obstacle_match_s_margin = node.declare_parameter<double>( "obstacle_avoidance.ghost_obstacle_match_s_margin", params.ghost_obstacle_match_s_margin );
-  params.ghost_obstacle_match_l_margin = node.declare_parameter<double>( "obstacle_avoidance.ghost_obstacle_match_l_margin", params.ghost_obstacle_match_l_margin );
-  params.ghost_obstacle_max_lifetime = node.declare_parameter<double>( "obstacle_avoidance.ghost_obstacle_max_lifetime", params.ghost_obstacle_max_lifetime );
-  params.ghost_dynamic_max_missing_cycles = node.declare_parameter<int>( "obstacle_avoidance.ghost_dynamic_max_missing_cycles", params.ghost_dynamic_max_missing_cycles );
-
   // Trajectory and geometry parameters
   params.min_vehicle_dimension = node.declare_parameter<double>( "obstacle_avoidance.min_vehicle_dimension", params.min_vehicle_dimension );
   params.route_window_min = node.declare_parameter<double>( "obstacle_avoidance.route_window_min", params.route_window_min );

@@ -119,11 +119,7 @@ obstacle_avoidance_label(
 // Single-sourced in planning/obstacle_avoidance.hpp; brought into this namespace
 // so existing unqualified call sites keep working.
 using planner::project_s_on_reference_line;
-using planner::make_original_obstacle_envelope_from_participant;
-using planner::update_obstacle_ghost_memory;
 using planner::start_active_avoidance_state;
-using planner::most_relevant_ghost_conflict;
-using planner::find_unpassed_original_ghost;
 using planner::make_oncoming_monitor_conflict;
 using planner::static_or_slow_conflict_has_side_clearance;
 using planner::compute_route_stop_plan;
@@ -859,12 +855,7 @@ try_dynamic_replan_from_route(
 
     start_active_avoidance_state(
         active_avoidance_state,
-        replan_result,
-        replan_base_route,
-        traffic_participants,
-        vehicle_state_dynamic,
-        params_for_obstacle_avoidance,
-        true );
+        replan_result );
     if( additional_ignored_participant_ids != nullptr )
     {
         append_unique_ids(
@@ -1030,6 +1021,17 @@ continue_active_avoidance(
     const double ego_s_modified = ego_s_modified_opt.value();
     pinned_active_stop_s = ego_s_modified;
 
+    // Commit latch. Once ego has physically begun the lateral shift, the maneuver
+    // is committed: it is driven to its release point and a disappearing obstacle
+    // no longer snaps ego back to the original line. Sticky and only cleared by
+    // reset(), so a dynamic replan that moves shift_start_s cannot un-commit an
+    // in-progress shift.
+    if( std::isfinite( ego_s_modified ) &&
+        ego_s_modified >= active_avoidance_state.shift_start_s )
+    {
+        active_avoidance_state.committed = true;
+    }
+
     // Oncoming-wait latch. Once we stop for an oncoming participant, keep holding
     // (pulled up at the avoided obstacle) until that participant has cleared the
     // opposite-lane conflict interval, instead of re-running the per-cycle go/stop
@@ -1084,24 +1086,10 @@ continue_active_avoidance(
         }
         else
         {
-            // With ghosting disabled, a participant that is no longer perceived
-            // must release the latch immediately. Otherwise bridge only a brief
-            // perception dropout using the configured hold time.
-            if( !params_for_obstacle_avoidance.ghost_memory_enabled )
-            {
-                release_wait = true;
-            }
-            else
-            {
-                const double hold_time =
-                    std::max( 0.0, params_for_obstacle_avoidance.ghost_obstacle_hold_time );
-                if( !std::isfinite( active_avoidance_state.oncoming_wait_last_seen_time ) ||
-                    vehicle_state_dynamic.time >
-                        active_avoidance_state.oncoming_wait_last_seen_time + hold_time )
-                {
-                    release_wait = true;
-                }
-            }
+            // A participant that is no longer perceived is gone: release the latch
+            // immediately. The vehicle detects present objects directly, so an
+            // absent detection is treated as an absent object, not bridged.
+            release_wait = true;
         }
 
         if( !release_wait )
@@ -1169,17 +1157,11 @@ continue_active_avoidance(
             nullptr,
             &active_avoidance_state.obstacle_ids );
 
-    update_obstacle_ghost_memory(
-        active_avoidance_state,
-        active_route_safety,
-        ego_s_modified,
-        vehicle_state_dynamic.time,
-        params_for_obstacle_avoidance );
-
-    auto active_conflict =
-        active_route_safety.has_conflict
-            ? std::optional<::adore::planner::RouteCorridorConflict>( active_route_safety.conflict )
-            : most_relevant_ghost_conflict( active_avoidance_state, ego_s_modified );
+    std::optional<::adore::planner::RouteCorridorConflict> active_conflict;
+    if( active_route_safety.has_conflict )
+    {
+        active_conflict = active_route_safety.conflict;
+    }
 
     if( active_conflict.has_value() &&
         active_avoidance_state.in_lane &&
@@ -1265,12 +1247,13 @@ continue_active_avoidance(
         }
     }
 
-    // Without ghost memory, a vanished maneuver obstacle must not pin ego to
-    // the stale modified route until its original release point. Re-enter the
-    // normal mission-route planning flow as soon as none of the obstacles that
-    // created the active maneuver is present anymore. This performs a fresh OA
-    // calculation for all currently visible participants and returns to the
-    // mission route only when no replacement maneuver is needed.
+    // Before ego has committed to the shift (it has not yet physically begun the
+    // lateral offset), a vanished or no-longer-tracked maneuver obstacle must not
+    // pin ego to the modified route. Re-enter the normal mission-route planning
+    // flow: a fresh OA calculation for all currently visible participants returns
+    // to the mission route when no replacement maneuver is needed. Once committed,
+    // the maneuver is driven to its release point regardless of a lost detection,
+    // so ego never snaps back to the original line mid-shift.
     const bool tracked_maneuver_obstacle_visible =
         !active_avoidance_state.obstacle_ids.empty()
             ? std::any_of(
@@ -1286,20 +1269,7 @@ continue_active_avoidance(
                       active_avoidance_state.obstacle_id ) !=
                       traffic_participants.participants.end();
 
-    const auto retained_original_ghost =
-        find_unpassed_original_ghost(
-            active_avoidance_state,
-            ego_s_modified );
-
-    // A vanished maneuver obstacle may retain the modified route only while its
-    // original ghost is alive. The ghost updater removes that envelope when ego
-    // passes its release position or when ghost_obstacle_max_lifetime expires.
-    // Thus an active route can never be pinned indefinitely by ghost memory.
-    const bool vanished_obstacle_hold_finished =
-        !params_for_obstacle_avoidance.ghost_memory_enabled ||
-        !retained_original_ghost.has_value();
-
-    if( vanished_obstacle_hold_finished &&
+    if( !active_avoidance_state.committed &&
         !tracked_maneuver_obstacle_visible &&
         !active_conflict.has_value() )
     {
@@ -1359,8 +1329,7 @@ continue_active_avoidance(
         ego_s_original >= active_avoidance_state.release_s &&
         projection_consistent;
 
-    if( ( release_by_modified || release_by_original_fallback ) &&
-        !retained_original_ghost.has_value() )
+    if( release_by_modified || release_by_original_fallback )
     {
         active_avoidance_state.reset();
 
@@ -1598,13 +1567,6 @@ plan_obstacle_avoidance_behavior(
     const planner::ObstacleAvoidanceParams& params_for_obstacle_avoidance,
     planner::ActiveAvoidanceState& active_avoidance_state )
 {
-    // Also clear memory left from a previous runtime configuration. This path
-    // owns stop_hold; active maneuver ghost_memory is cleared in its updater.
-    if( !params_for_obstacle_avoidance.ghost_memory_enabled )
-    {
-        active_avoidance_state.stop_hold.reset();
-    }
-
     if( !params_for_obstacle_avoidance.enabled )
     {
         active_avoidance_state.reset();
@@ -1667,38 +1629,15 @@ plan_obstacle_avoidance_behavior(
         // but they must not activate a persistent avoidance state.
         if( oa_result.has_maneuver_bounds )
         {
+            // Fresh maneuver: start uncommitted. The commit latch is raised only
+            // once ego has physically begun the lateral shift.
             start_active_avoidance_state(
                 active_avoidance_state,
-                oa_result,
-                route_with_signal,
-                traffic_participants,
-                vehicle_state_dynamic,
-                params_for_obstacle_avoidance );
-            // The active ghost memory takes over obstacle persistence.
-            active_avoidance_state.stop_hold.reset();
+                oa_result );
+            active_avoidance_state.committed = false;
         }
         else
         {
-            // Remember the obstacle behind this stop/wait so short
-            // perception dropouts do not toggle between stopping and
-            // resuming.
-            const auto stop_hold_participant_it =
-                traffic_participants.participants.find( oa_result.obstacle_id );
-            if( params_for_obstacle_avoidance.ghost_memory_enabled &&
-                stop_hold_participant_it != traffic_participants.participants.end() )
-            {
-                const auto hold_envelope =
-                    make_original_obstacle_envelope_from_participant(
-                        route_with_signal,
-                        stop_hold_participant_it->second,
-                        vehicle_state_dynamic.time,
-                        params_for_obstacle_avoidance );
-                if( hold_envelope.has_value() )
-                {
-                    active_avoidance_state.stop_hold = hold_envelope;
-                }
-            }
-
             // While the obstacle is still beyond braking range, do not force a stop
             // trajectory: building one here (make_stop_on_active_route_behavior) can
             // false-fail its in-horizon stop proof when the stop point is far and
@@ -1869,75 +1808,6 @@ plan_obstacle_avoidance_behavior(
             vehicle_state_dynamic,
             traffic_participants,
             params_for_obstacle_avoidance );
-    }
-
-    // -------------------------------------------------------------------------
-    // No OA result this cycle. If a stop/wait obstacle was seen recently,
-    // keep stopping for its remembered envelope instead of resuming and
-    // re-braking on every perception dropout.
-    // -------------------------------------------------------------------------
-    if( params_for_obstacle_avoidance.ghost_memory_enabled &&
-        active_avoidance_state.stop_hold.has_value() )
-    {
-        const auto& hold = active_avoidance_state.stop_hold.value();
-        const double now = vehicle_state_dynamic.time;
-        const double ego_s_hold =
-            route_with_signal.get_s( vehicle_state_dynamic );
-
-        const bool hold_expired =
-            !std::isfinite( hold.last_seen_time ) ||
-            now > hold.last_seen_time +
-                      std::max( 0.0, params_for_obstacle_avoidance.ghost_obstacle_hold_time );
-        const bool hold_passed =
-            std::isfinite( ego_s_hold ) &&
-            ego_s_hold > hold.hold_until_s;
-
-        if( hold_expired || hold_passed )
-        {
-            active_avoidance_state.stop_hold.reset();
-        }
-        else
-        {
-            ::adore::planner::RouteCorridorConflict hold_conflict;
-            hold_conflict.participant_id = hold.last_participant_id;
-            hold_conflict.object_class =
-                ::adore::planner::RouteCorridorObjectClass::StaticOrSlow;
-            hold_conflict.object_s_min = hold.object_s_min;
-            hold_conflict.object_s_max = hold.object_s_max;
-            hold_conflict.object_l_min = hold.object_l_min;
-            hold_conflict.object_l_max = hold.object_l_max;
-            hold_conflict.inflated_s_min = hold.inflated_s_min;
-            hold_conflict.inflated_s_max = hold.inflated_s_max;
-            hold_conflict.inflated_l_min = hold.inflated_l_min;
-            hold_conflict.inflated_l_max = hold.inflated_l_max;
-            hold_conflict.distance_s =
-                std::isfinite( ego_s_hold )
-                    ? std::max( 0.0, hold.object_s_min - ego_s_hold )
-                    : std::numeric_limits<double>::infinity();
-            hold_conflict.time_to_conflict = 0.0;
-            hold_conflict.currently_overlaps_route_corridor = true;
-            hold_conflict.requires_stop = true;
-            hold_conflict.object_center_x = hold.object_center_x;
-            hold_conflict.object_center_y = hold.object_center_y;
-            hold_conflict.object_yaw = hold.object_yaw;
-            hold_conflict.object_length = hold.object_length;
-            hold_conflict.object_width = hold.object_width;
-            hold_conflict.footprint_x = hold.footprint_x;
-            hold_conflict.footprint_y = hold.footprint_y;
-            hold_conflict.has_world_footprint = hold.has_world_footprint;
-            hold_conflict.reason =
-                "stop-hold envelope retained after temporary detection loss";
-
-
-            return make_stop_on_active_route_behavior(
-                planner,
-                route_with_signal,
-                hold_conflict,
-                vehicle_state_dynamic,
-                traffic_participants,
-                params_for_obstacle_avoidance,
-                "original" );
-        }
     }
 
     // -------------------------------------------------------------------------
