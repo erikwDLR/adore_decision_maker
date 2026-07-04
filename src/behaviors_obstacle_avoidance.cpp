@@ -846,16 +846,28 @@ try_dynamic_replan_from_route(
     const dynamics::TrafficParticipantSet& traffic_participants,
     const planner::ObstacleAvoidanceParams& params_for_obstacle_avoidance,
     planner::ActiveAvoidanceState& active_avoidance_state,
-    const std::vector<int>* additional_ignored_participant_ids = nullptr )
+    const std::vector<int>* additional_ignored_participant_ids = nullptr,
+    const std::vector<int>* committed_obstacle_ids = nullptr )
 {
+    // Mid-maneuver replan (new obstacle while ego is committed): use the shorter
+    // min_front_clearance entry ramp. A late obstacle can leave ego closer than
+    // the full front_clearance, so the 7 m ramp no longer fits the remaining
+    // distance and the replan fails despite physical room; the reduced ramp fits
+    // (ego is typically slow / braking by then). The initial maneuver entry
+    // already used full front_clearance; rear_clearance (exit) is unchanged.
+    auto replan_params = params_for_obstacle_avoidance;
+    replan_params.front_clearance =
+        std::min( replan_params.front_clearance, replan_params.min_front_clearance );
+
     const auto replan_result =
         ::adore::planner::try_plan_obstacle_avoidance(
             planner,
             replan_base_route,
             vehicle_state_dynamic,
             traffic_participants,
-            params_for_obstacle_avoidance,
-            additional_ignored_participant_ids );
+            replan_params,
+            additional_ignored_participant_ids,
+            committed_obstacle_ids );
 
     if( !replan_result.success ||
         !replan_result.has_maneuver_bounds )
@@ -898,7 +910,7 @@ try_dynamic_replan_from_route(
             replan_result.shift_end_s,
             replan_result.maneuver.release_s,
             planner.get_physical_vehicle_parameters(),
-            params_for_obstacle_avoidance,
+            replan_params,
             vehicle_state_dynamic.vx );
 
     try
@@ -957,7 +969,7 @@ try_dynamic_replan_from_route(
                 replan_ego_s,
                 replan_result.shift_start_s,
                 replan_result.obstacle_s_min,
-                params_for_obstacle_avoidance ) );
+                replan_params ) );
 
     Behavior trajectory_and_signal;
     trajectory_and_signal.trajectory =
@@ -1301,7 +1313,13 @@ continue_active_avoidance(
                         vehicle_state_dynamic,
                         traffic_participants,
                         params_for_obstacle_avoidance,
-                        active_avoidance_state );
+                        active_avoidance_state,
+                        // Keep the committed obstacle(s) in the merged group so the
+                        // route still clears them, but skip re-validating their
+                        // clearance from ego's transient mid-turn pose (that is the
+                        // spurious obj1 failure). Only the new obstacle is validated.
+                        /*additional_ignored_participant_ids=*/nullptr,
+                        &active_avoidance_state.obstacle_ids );
                 replanned_behavior.has_value() )
             {
                 return replanned_behavior.value();

@@ -22,6 +22,9 @@
     # Longitudinal maneuver geometry
     obstacle_avoidance.front_clearance: 7.0
     obstacle_avoidance.rear_clearance: 7.0
+    # Shorter entry ramp for mid-maneuver replans on a late new obstacle (fits when
+    # ego is already closer than front_clearance to it).
+    obstacle_avoidance.min_front_clearance: 3.0
     obstacle_avoidance.stop_before_obstacle: 8.0
 
     # Mode switches
@@ -72,9 +75,6 @@
     # Multi-obstacle grouping parameters
     obstacle_avoidance.cluster_hold_gap_s: 10.0
     obstacle_avoidance.shift_hull_gap_s: 20.0
-
-    # Minimum shift fraction between hull-linked obstacles
-    obstacle_avoidance.min_alpha_between_hull_obstacles: 0.5
 
     # Internal switch for evaluating extra lateral shift variants
     obstacle_avoidance.enable_multi_candidate_route_shift: true
