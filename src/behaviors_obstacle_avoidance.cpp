@@ -198,6 +198,31 @@ apply_active_avoidance_speed_profile(
         ego_v );
 }
 
+// Copy of params with max_speed_during_avoidance sized (physics) to the maneuver
+// shift and its FIXED entry-ramp length (obstacle_s_min - shift_start_s), so a
+// re-applied avoidance speed profile matches what try_plan validated instead of
+// overwriting it with the fixed cap (see planner::avoidance_speed_for_shift).
+// Must use the maneuver ramp, NOT the shrinking ego->obstacle distance, otherwise
+// the sized speed would keep dropping as ego approaches and ego would crawl.
+static planner::ObstacleAvoidanceParams
+params_with_sized_avoidance_speed(
+    const planner::ObstacleAvoidanceParams& params,
+    const dynamics::PhysicalVehicleParameters& vehicle_params,
+    double entry_ramp_length,
+    double lateral_shift )
+{
+    auto sized = params;
+    const double ego_front_offset =
+        vehicle_params.wheelbase + vehicle_params.front_axle_to_front_border;
+    const double ramp =
+        ::adore::planner::avoidance_ramp_length(
+            entry_ramp_length, ego_front_offset, params );
+    sized.max_speed_during_avoidance =
+        ::adore::planner::avoidance_speed_for_shift(
+            ramp, lateral_shift, params );
+    return sized;
+}
+
 map::Route
 make_max_braking_route_from_s(
     const map::Route& route,
@@ -849,23 +874,18 @@ try_dynamic_replan_from_route(
     const std::vector<int>* additional_ignored_participant_ids = nullptr,
     const std::vector<int>* committed_obstacle_ids = nullptr )
 {
-    // Mid-maneuver replan (new obstacle while ego is committed): use the shorter
-    // min_front_clearance entry ramp. A late obstacle can leave ego closer than
-    // the full front_clearance, so the 7 m ramp no longer fits the remaining
-    // distance and the replan fails despite physical room; the reduced ramp fits
-    // (ego is typically slow / braking by then). The initial maneuver entry
-    // already used full front_clearance; rear_clearance (exit) is unchanged.
-    auto replan_params = params_for_obstacle_avoidance;
-    replan_params.front_clearance =
-        std::min( replan_params.front_clearance, replan_params.min_front_clearance );
-
+    // Mid-maneuver replan for a new obstacle. try_plan sizes the entry ramp to the
+    // available distance and the maneuver speed to the shift (physics), so a late
+    // obstacle where ego is close still gets a fitting short ramp + matching slow
+    // speed. The committed obstacle stays in the group but its clearance is not
+    // re-validated from ego's transient turn-in pose (committed_obstacle_ids).
     const auto replan_result =
         ::adore::planner::try_plan_obstacle_avoidance(
             planner,
             replan_base_route,
             vehicle_state_dynamic,
             traffic_participants,
-            replan_params,
+            params_for_obstacle_avoidance,
             additional_ignored_participant_ids,
             committed_obstacle_ids );
 
@@ -901,6 +921,17 @@ try_dynamic_replan_from_route(
     {
         replan_ego_s = projection_hint_s;
     }
+
+    // Match the re-applied speed profile to try_plan's physics-sized maneuver:
+    // the avoidance speed depends on the chosen shift and the available ramp, so
+    // recompute it (same helper) instead of letting the re-apply overwrite the
+    // slow validated speed with the fixed cap.
+    const auto replan_params =
+        params_with_sized_avoidance_speed(
+            params_for_obstacle_avoidance,
+            planner.get_physical_vehicle_parameters(),
+            replan_result.obstacle_s_min - replan_result.shift_start_s,
+            replan_result.lateral_shift );
 
     auto replan_route_for_planning =
         apply_active_avoidance_speed_profile(
@@ -1533,7 +1564,11 @@ continue_active_avoidance(
                 active_avoidance_state.shift_end_s,
                 active_avoidance_state.release_s,
                 planner.get_physical_vehicle_parameters(),
-                params_for_obstacle_avoidance,
+                params_with_sized_avoidance_speed(
+                    params_for_obstacle_avoidance,
+                    planner.get_physical_vehicle_parameters(),
+                    active_avoidance_state.obstacle_s_min - active_avoidance_state.shift_start_s,
+                    active_avoidance_state.lateral_shift ),
                 vehicle_state_dynamic.vx );
 
         if( use_weather_comfort_settings )
@@ -1898,7 +1933,11 @@ plan_obstacle_avoidance_behavior(
                 oa_result.shift_end_s,
                 oa_result.maneuver.release_s,
                 planner.get_physical_vehicle_parameters(),
-                params_for_obstacle_avoidance,
+                params_with_sized_avoidance_speed(
+                    params_for_obstacle_avoidance,
+                    planner.get_physical_vehicle_parameters(),
+                    oa_result.obstacle_s_min - oa_result.shift_start_s,
+                    oa_result.lateral_shift ),
                 vehicle_state_dynamic.vx );
         active_avoidance_state.modified_route =
             modified_route_for_planning;

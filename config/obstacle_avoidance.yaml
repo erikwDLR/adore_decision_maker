@@ -7,7 +7,7 @@
     obstacle_avoidance.enabled: true
 
     # Object detection
-    obstacle_avoidance.max_object_ahead: 100.0
+    obstacle_avoidance.max_object_ahead: 80.0
     obstacle_avoidance.max_static_object_speed: 0.5
 
     # Speed hysteresis before an already-avoided obstacle stops being ignored
@@ -19,12 +19,10 @@
     # Real lateral object clearance
     obstacle_avoidance.side_clearance: 1.0
 
-    # Longitudinal maneuver geometry
+    # Longitudinal maneuver geometry. front_clearance is the MAX entry ramp; the
+    # effective ramp is sized down to the available distance to a late obstacle.
     obstacle_avoidance.front_clearance: 7.0
     obstacle_avoidance.rear_clearance: 7.0
-    # Shorter entry ramp for mid-maneuver replans on a late new obstacle (fits when
-    # ego is already closer than front_clearance to it).
-    obstacle_avoidance.min_front_clearance: 3.0
     obstacle_avoidance.stop_before_obstacle: 8.0
 
     # Mode switches
@@ -35,7 +33,14 @@
 
     # Drivable area / route behavior
     obstacle_avoidance.enforce_drivable_area: true
+    # Upper speed cap during avoidance; the maneuver speed is sized down from this
+    # so the lateral shift stays within avoidance_lateral_accel over the entry ramp
+    # (v = ramp*sqrt(a/(6*D))). Raise to let small shifts drive faster.
     obstacle_avoidance.max_speed_during_avoidance: 2.78
+    # Comfort lateral acceleration coupling maneuver speed and ramp length.
+    obstacle_avoidance.avoidance_lateral_accel: 4.0 # 2.0 # 3.0 #2.0
+    # Creep floor for the sized avoidance speed (m/s).
+    obstacle_avoidance.min_avoidance_speed: 0.833 
 
     # Distance ahead of the lateral-shift start at which the turn indicator
     # switches on (the blinker stays off while the maneuver is only decided).

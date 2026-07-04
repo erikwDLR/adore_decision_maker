@@ -71,7 +71,8 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
   params.ego_corridor_safety_margin = node.declare_parameter<double>( "obstacle_avoidance.ego_corridor_safety_margin", params.ego_corridor_safety_margin );
   params.side_clearance = node.declare_parameter<double>( "obstacle_avoidance.side_clearance", params.side_clearance );
   params.front_clearance = node.declare_parameter<double>( "obstacle_avoidance.front_clearance", params.front_clearance );
-  params.min_front_clearance = node.declare_parameter<double>( "obstacle_avoidance.min_front_clearance", params.min_front_clearance );
+  params.avoidance_lateral_accel = node.declare_parameter<double>( "obstacle_avoidance.avoidance_lateral_accel", params.avoidance_lateral_accel );
+  params.min_avoidance_speed = node.declare_parameter<double>( "obstacle_avoidance.min_avoidance_speed", params.min_avoidance_speed );
   params.rear_clearance = node.declare_parameter<double>( "obstacle_avoidance.rear_clearance", params.rear_clearance );
   params.stop_before_obstacle = node.declare_parameter<double>( "obstacle_avoidance.stop_before_obstacle", params.stop_before_obstacle );
   params.in_lane_shift_enabled = node.declare_parameter<bool>( "obstacle_avoidance.in_lane_shift_enabled", params.in_lane_shift_enabled );
