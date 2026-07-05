@@ -53,7 +53,7 @@
     # Candidate generation
     obstacle_avoidance.validate_shifted_trajectory: true
     obstacle_avoidance.lateral_candidate_extra_steps: 2
-    obstacle_avoidance.lateral_candidate_extra_step: 0.30
+    obstacle_avoidance.lateral_candidate_extra_step: 0.20
 
     # Active route monitor
     obstacle_avoidance.modified_route_safety_check_enabled: true

@@ -23,6 +23,7 @@
 #include <cmath>
 #include <exception>
 #include <limits>
+#include <optional>
 #include <string>
 
 namespace adore
@@ -837,28 +838,6 @@ make_max_hull_inflated_participants(
     return inflated;
 }
 
-// True if a corridor conflict is caused by one of the active maneuver's own
-// obstacles (as opposed to a newly appeared participant).
-bool
-conflict_is_maneuver_obstacle(
-    const planner::RouteCorridorConflict& conflict,
-    const planner::ActiveAvoidanceState& active_avoidance_state )
-{
-    const int id = conflict.participant_id;
-    if( id < 0 )
-    {
-        return false;
-    }
-    if( std::find(
-            active_avoidance_state.obstacle_ids.begin(),
-            active_avoidance_state.obstacle_ids.end(),
-            id ) != active_avoidance_state.obstacle_ids.end() )
-    {
-        return true;
-    }
-    return id == active_avoidance_state.obstacle_id;
-}
-
 // Try to reshape the active maneuver from a base route (active modified or
 // mission). On success starts/refreshes the avoidance state and returns the
 // resulting Behavior; nullopt means keep the previous active route this cycle.
@@ -1363,16 +1342,16 @@ continue_active_avoidance(
         }
     }
 
-    // Growth monitor (committed maneuver only). Perception refines an obstacle's
-    // size as ego approaches, so the maneuver obstacle can turn out larger than
-    // when the shift was planned. Latch its maximum object-local dimensions and
-    // rebuild the participant set at that max size. If the max-hull now intrudes
-    // into the active-route corridor - grown wider into the shifted path, or
-    // longer so its rear reaches past the ramp-down - the committed shift no
-    // longer clears it: replan a larger avoidance from the mission route (at the
-    // max size, not ignoring the obstacle) so ego holds/extends the shift and
-    // continues the avoidance. If no valid larger avoidance exists, brake on the
-    // active route (never cut back to the original line alongside the obstacle).
+    // Driven-corridor guard (committed maneuver only). Each cycle, check whether
+    // ANY object actually intrudes the corridor of the route ego is driving; if so
+    // re-plan fresh, regardless of participant id. This single check subsumes the
+    // old id-matched growth replan: it covers a maneuver obstacle that grew, one
+    // that shifted back into the path, and the same physical object reappearing
+    // under a NEW id (blind-spot re-id). The size input is the max-hull latched set
+    // (never under-estimate: perception refines an obstacle's size as ego
+    // approaches), so an obstacle larger than first reported is caught as soon as
+    // its true extent cuts the corridor. update_tracked_obstacle_envelopes keeps
+    // that latch; make_max_hull_inflated_participants rebuilds the set at max size.
     if( active_avoidance_state.committed )
     {
         update_tracked_obstacle_envelopes(
@@ -1393,26 +1372,130 @@ continue_active_avoidance(
                 planner.get_physical_vehicle_parameters(),
                 params_for_obstacle_avoidance );
 
-        if( growth_safety.has_conflict &&
-            conflict_is_maneuver_obstacle(
-                growth_safety.conflict,
-                active_avoidance_state ) )
+        // Guard the exact corridor ego is driving, regardless of participant id.
+        // If the intruding static object is still ahead of the front bumper, try a
+        // fresh replan. If it is already too close / alongside, re-planning by
+        // dropping the committed maneuver can snap ego toward the mission line, so
+        // brake on the current active route instead. Only objects fully behind ego
+        // are ignored.
+        const double ego_front_offset =
+            planner.get_physical_vehicle_parameters().wheelbase +
+            planner.get_physical_vehicle_parameters().front_axle_to_front_border;
+        const double ego_front_s = ego_s_modified + ego_front_offset;
+        const double ego_rear_s =
+            ego_s_modified -
+            planner.get_physical_vehicle_parameters().rear_border_to_rear_axle;
+
+        const auto conflict_fully_behind_ego =
+            [&]( const ::adore::planner::RouteCorridorConflict& conflict )
+            {
+                return std::isfinite( conflict.object_s_max ) &&
+                       std::isfinite( ego_rear_s ) &&
+                       conflict.object_s_max < ego_rear_s - 0.25 &&
+                       !conflict.currently_overlaps_ego_footprint;
+            };
+
+        std::optional<::adore::planner::RouteCorridorConflict> driven_conflict;
+        for( const auto& conflict : growth_safety.conflicts )
         {
+            if( conflict.object_class !=
+                    ::adore::planner::RouteCorridorObjectClass::StaticOrSlow ||
+                ::adore::planner::is_oncoming_other_lane_conflict(
+                    conflict,
+                    planner.get_physical_vehicle_parameters(),
+                    params_for_obstacle_avoidance ) ||
+                !std::isfinite( conflict.object_s_min ) ||
+                !std::isfinite( conflict.object_s_max ) ||
+                !std::isfinite( ego_s_modified ) ||
+                conflict_fully_behind_ego( conflict ) )
+            {
+                continue;
+            }
+
+            const bool prefer_conflict =
+                !driven_conflict.has_value() ||
+                ( conflict.currently_overlaps_ego_footprint &&
+                  !driven_conflict->currently_overlaps_ego_footprint ) ||
+                ( conflict.currently_overlaps_ego_footprint ==
+                    driven_conflict->currently_overlaps_ego_footprint &&
+                  conflict.distance_s < driven_conflict->distance_s );
+
+            if( prefer_conflict )
+            {
+                driven_conflict = conflict;
+            }
+        }
+
+        const bool driven_corridor_intrusion =
+            driven_conflict.has_value();
+        const bool driven_conflict_ahead_of_front =
+            growth_safety.has_conflict &&
+            driven_conflict.has_value() &&
+            driven_conflict->object_s_min > ego_front_s;
+
+        if( driven_corridor_intrusion )
+        {
+            static rclcpp::Clock guard_log_clock{ RCL_STEADY_TIME };
+            RCLCPP_INFO_THROTTLE(
+                rclcpp::get_logger( "Behaviors" ),
+                guard_log_clock,
+                1000,
+                "[OA][GUARD] object id=%d intrudes driven corridor "
+                "s=[%.1f,%.1f] l=[%.2f,%.2f]; %s",
+                driven_conflict->participant_id,
+                driven_conflict->object_s_min,
+                driven_conflict->object_s_max,
+                driven_conflict->object_l_min,
+                driven_conflict->object_l_max,
+                driven_conflict_ahead_of_front
+                    ? "re-planning fresh"
+                    : "braking on active route" );
+
+            if( !driven_conflict_ahead_of_front )
+            {
+                return make_active_conflict_stop_behavior( driven_conflict.value() );
+            }
+
+            // Re-plan from the route ego actually drives (the modified route), NOT
+            // the mission line -- planning from the mission line rebuilds the shift
+            // from the original centerline and snaps ego back toward it. This is the
+            // same driven-route path the new-obstacle case (active_conflict, attempt
+            // 1) already takes cleanly; the guard just has to take it too for a
+            // committed obstacle that MOVED (active_route_safety ignores committed
+            // ids, so a moved committed obstacle only surfaces here). Ignore every
+            // committed obstacle EXCEPT the intruder so detection locks onto the one
+            // that broke back into the driven corridor; the others stay cleared by
+            // the shift already baked into the modified geometry. NOTE: the base
+            // route keeps its mission-lane parent_id (no metadata reprojection), so
+            // the candidate machinery's opposite/adjacent/side reasoning -- which is
+            // derived from current_lane = ego's mission lane -- stays correct.
+            std::vector<int> committed_ignore_except_intruder;
+            committed_ignore_except_intruder.reserve(
+                active_avoidance_state.obstacle_ids.size() );
+            for( const int committed_id : active_avoidance_state.obstacle_ids )
+            {
+                if( committed_id != driven_conflict->participant_id )
+                {
+                    committed_ignore_except_intruder.push_back( committed_id );
+                }
+            }
+
             if( auto replanned_behavior =
                     try_dynamic_replan_from_route(
                         planner,
-                        route_with_signal,
-                        ego_s_original,
+                        active_route,
+                        ego_s_modified,
                         vehicle_state_dynamic,
                         inflated_participants,
                         params_for_obstacle_avoidance,
-                        active_avoidance_state );
+                        active_avoidance_state,
+                        &committed_ignore_except_intruder );
                 replanned_behavior.has_value() )
             {
                 return replanned_behavior.value();
             }
 
-            return make_active_conflict_stop_behavior( growth_safety.conflict );
+            return make_active_conflict_stop_behavior( driven_conflict.value() );
         }
     }
 
