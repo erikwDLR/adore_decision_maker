@@ -74,6 +74,7 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
   params.avoidance_lateral_accel = node.declare_parameter<double>( "obstacle_avoidance.avoidance_lateral_accel", params.avoidance_lateral_accel );
   params.min_avoidance_speed = node.declare_parameter<double>( "obstacle_avoidance.min_avoidance_speed", params.min_avoidance_speed );
   params.rear_clearance = node.declare_parameter<double>( "obstacle_avoidance.rear_clearance", params.rear_clearance );
+  params.group_shrink_confirm_time = node.declare_parameter<double>( "obstacle_avoidance.group_shrink_confirm_time", params.group_shrink_confirm_time );
   params.stop_before_obstacle = node.declare_parameter<double>( "obstacle_avoidance.stop_before_obstacle", params.stop_before_obstacle );
   params.in_lane_shift_enabled = node.declare_parameter<bool>( "obstacle_avoidance.in_lane_shift_enabled", params.in_lane_shift_enabled );
   params.adjacent_lane_enabled = node.declare_parameter<bool>( "obstacle_avoidance.adjacent_lane_enabled", params.adjacent_lane_enabled );

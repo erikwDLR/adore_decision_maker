@@ -24,6 +24,10 @@
     obstacle_avoidance.front_clearance: 7.0
     obstacle_avoidance.rear_clearance: 7.0
     obstacle_avoidance.stop_before_obstacle: 8.0
+    # Pre-commit: how long a grouped obstacle must stop blocking the mission route
+    # (vanished or moved out of the corridor) before the over-sized shift is
+    # dropped and re-planned tighter. Debounces perception flicker.
+    obstacle_avoidance.group_shrink_confirm_time: 0.5
 
     # Mode switches
     obstacle_avoidance.in_lane_shift_enabled: true
@@ -38,7 +42,7 @@
     # (v = ramp*sqrt(a/(6*D))). Raise to let small shifts drive faster.
     obstacle_avoidance.max_speed_during_avoidance: 2.78
     # Comfort lateral acceleration coupling maneuver speed and ramp length.
-    obstacle_avoidance.avoidance_lateral_accel: 4.0 # 2.0 # 3.0 #2.0
+    obstacle_avoidance.avoidance_lateral_accel: 2.0 # 3.0 #2.0
     # Creep floor for the sized avoidance speed (m/s).
     obstacle_avoidance.min_avoidance_speed: 0.833 
 

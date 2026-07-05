@@ -1447,12 +1447,23 @@ continue_active_avoidance(
         if( !tracked_maneuver_obstacle_visible )
         {
             return_to_mission_pre_commit = true;
+            active_avoidance_state.group_shrink_since_time =
+                std::numeric_limits<double>::quiet_NaN();
         }
         else
         {
-            // Obstacle still tracked: return only if the original mission route is
-            // now actually free (it moved out of the corridor), so ego stops
-            // swerving for an obstacle that no longer blocks its lane.
+            // Obstacle(s) still tracked. Re-check the mission route and drop the
+            // pre-commit maneuver in two cases:
+            //  1. the lane is fully free again (every blocker moved out of the
+            //     corridor) -> return to the mission line;
+            //  2. the group SHRANK -- the maneuver was planned for several
+            //     obstacles and at least one no longer blocks the mission route
+            //     (it vanished, or moved out of the corridor) while others remain
+            //     -- so the committed shift is over-sized. Re-plan from the
+            //     mission route for the remaining blockers (a tighter avoidance)
+            //     instead of driving the whole multi-object shift.
+            // Both are safe pre-commit: ego is still on the mission line (no
+            // lateral offset yet), so the reset + fresh plan is discontinuity-free.
             const auto original_route_safety =
                 ::adore::planner::check_route_corridor_safety(
                     route_with_signal,
@@ -1460,7 +1471,74 @@ continue_active_avoidance(
                     traffic_participants,
                     planner.get_physical_vehicle_parameters(),
                     params_for_obstacle_avoidance );
-            return_to_mission_pre_commit = !original_route_safety.has_conflict;
+
+            const bool mission_route_clear = !original_route_safety.has_conflict;
+
+            // How many of the planned maneuver obstacles still need the shift,
+            // i.e. still violate side_clearance to a mission-route-centered ego?
+            // Use the same side_clearance rule that grouped them (NOT the tighter
+            // ego_corridor_safety_margin corridor test), so an edge obstacle that
+            // was grouped but never trips the narrow corridor is not miscounted as
+            // "gone". A vanished obstacle is simply no longer among participants.
+            std::size_t still_blocking = 0;
+            for( const int maneuver_obstacle_id : active_avoidance_state.obstacle_ids )
+            {
+                const auto participant_it =
+                    traffic_participants.participants.find( maneuver_obstacle_id );
+                if( participant_it == traffic_participants.participants.end() )
+                {
+                    continue; // vanished -> no longer blocking
+                }
+                const bool has_side_clearance =
+                    ::adore::planner::participant_has_side_clearance_to_route_corridor(
+                        route_with_signal,
+                        participant_it->second,
+                        planner.get_physical_vehicle_parameters(),
+                        params_for_obstacle_avoidance );
+                if( !has_side_clearance )
+                {
+                    ++still_blocking; // still within side_clearance -> still needs the shift
+                }
+            }
+
+            const bool group_shrank =
+                active_avoidance_state.obstacle_ids.size() > 1 &&
+                still_blocking < active_avoidance_state.obstacle_ids.size();
+
+            // Debounce the shrink against perception flicker before acting.
+            if( group_shrank && !mission_route_clear )
+            {
+                if( !std::isfinite( active_avoidance_state.group_shrink_since_time ) )
+                {
+                    active_avoidance_state.group_shrink_since_time =
+                        vehicle_state_dynamic.time;
+                }
+            }
+            else
+            {
+                active_avoidance_state.group_shrink_since_time =
+                    std::numeric_limits<double>::quiet_NaN();
+            }
+
+            const bool shrink_confirmed =
+                group_shrank &&
+                std::isfinite( active_avoidance_state.group_shrink_since_time ) &&
+                ( vehicle_state_dynamic.time -
+                  active_avoidance_state.group_shrink_since_time ) >=
+                    std::max( 0.0,
+                              params_for_obstacle_avoidance.group_shrink_confirm_time );
+
+            if( shrink_confirmed && !mission_route_clear )
+            {
+                RCLCPP_INFO(
+                    rclcpp::get_logger( "Behaviors" ),
+                    "[OA][SHRINK] pre-commit group shrank (%zu of %zu planned "
+                    "obstacles still block); re-planning tighter avoidance",
+                    still_blocking,
+                    active_avoidance_state.obstacle_ids.size() );
+            }
+
+            return_to_mission_pre_commit = mission_route_clear || shrink_confirmed;
         }
     }
 
