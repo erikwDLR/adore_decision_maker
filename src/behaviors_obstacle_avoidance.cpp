@@ -124,7 +124,6 @@ using planner::start_active_avoidance_state;
 using planner::update_tracked_obstacle_envelopes;
 using planner::make_oncoming_monitor_conflict;
 using planner::static_or_slow_conflict_has_side_clearance;
-using planner::compute_route_stop_plan;
 using planner::should_stop_for_active_conflict;
 using planner::compute_monotonic_ego_s_modified;
 
@@ -486,166 +485,6 @@ make_stop_on_route_behavior(
     {
         *accepted_stop_route = stop_route;
     }
-    return behavior;
-}
-
-Behavior
-make_stop_on_active_route_behavior(
-    planner::TrajectoryPlanner& planner,
-    const map::Route& active_route,
-    const planner::RouteCorridorConflict& conflict,
-    const dynamics::VehicleStateDynamic& ego,
-    const dynamics::TrafficParticipantSet& traffic_participants,
-    const planner::ObstacleAvoidanceParams& params,
-    const std::string& active_route_name,
-    map::Route* accepted_stop_route = nullptr )
-{
-    const auto vehicle_params = planner.get_physical_vehicle_parameters();
-    const auto stop_plan =
-        compute_route_stop_plan(
-            active_route,
-            ego,
-            vehicle_params,
-            conflict,
-            params );
-    const double requested_stop_s =
-        std::isfinite( stop_plan.stop_s )
-            ? stop_plan.stop_s
-            : conflict.object_s_min -
-              std::max( 0.0, params.stop_before_obstacle ) -
-              ( vehicle_params.wheelbase + vehicle_params.front_axle_to_front_border );
-    const double v0 = std::max( 0.0, ego.vx );
-    const double safety_margin =
-        std::max( 0.0, params.modified_route_braking_safety_margin ) +
-        std::max( 0.0, params.min_valid_stop_margin );
-    const double close_stop_hold_margin =
-        std::max( 0.25, std::min( 1.0, std::max( 0.0, params.min_valid_stop_margin ) ) );
-    const double reachability_margin =
-        v0 > 0.5
-            ? safety_margin
-            : close_stop_hold_margin;
-    const bool requested_stop_reachable =
-        std::isfinite( stop_plan.ego_s ) &&
-        std::isfinite( requested_stop_s ) &&
-        requested_stop_s > stop_plan.ego_s &&
-        requested_stop_s - stop_plan.ego_s >=
-            stop_plan.required_braking_distance + reachability_margin;
-
-    map::Route stop_route =
-        make_stop_route_on_active_route(
-            active_route,
-            ego,
-            requested_stop_s,
-            vehicle_params,
-            params );
-
-    dynamics::Trajectory trajectory;
-    try
-    {
-        trajectory =
-            planner.plan_route_trajectory( stop_route, ego, traffic_participants );
-    }
-    catch( const std::exception& )
-    {
-    }
-
-    if( trajectory.states.empty() ||
-        !::adore::planner::trajectory_stops_before_conflict(
-            trajectory,
-            stop_route,
-            conflict,
-            vehicle_params,
-            params ) )
-    {
-
-        if( requested_stop_reachable )
-        {
-            return make_route_failsafe_behavior(
-                planner,
-                active_route,
-                ego,
-                traffic_participants,
-                params );
-        }
-
-        double ego_s = stop_plan.ego_s;
-        if( !std::isfinite( ego_s ) )
-        {
-            ego_s =
-                project_s_on_reference_line(
-                    active_route,
-                    ego,
-                    requested_stop_s );
-        }
-        if( !std::isfinite( ego_s ) && !active_route.reference_line.empty() )
-        {
-            ego_s = active_route.reference_line.begin()->first;
-        }
-
-        auto max_braking_route =
-            make_max_braking_route_from_s(
-                active_route,
-                ego_s,
-                ego.vx,
-                planner.get_physical_vehicle_parameters(),
-                params );
-
-        try
-        {
-            trajectory =
-                planner.plan_route_trajectory(
-                    max_braking_route,
-                    ego,
-                    traffic_participants );
-        }
-        catch( const std::exception& )
-        {
-        }
-
-        if( !trajectory.states.empty() &&
-            ::adore::planner::trajectory_stops_before_conflict(
-                trajectory,
-                max_braking_route,
-                conflict,
-                vehicle_params,
-                params,
-                true ) )
-        {
-            trajectory.adjust_start_time( ego.time );
-            trajectory.label =
-                "obstacle avoidance: maximum route-based braking on active " +
-                active_route_name + "_route";
-
-            if( accepted_stop_route != nullptr )
-            {
-                *accepted_stop_route = max_braking_route;
-            }
-
-            Behavior behavior;
-            behavior.trajectory = dynamics::conversions::to_ros_msg( trajectory );
-            behavior.modified_route = map::conversions::to_ros_msg( max_braking_route );
-            return behavior;
-        }
-
-        return make_route_failsafe_behavior(
-            planner,
-            active_route,
-            ego,
-            traffic_participants,
-            params );
-    }
-
-    trajectory.adjust_start_time( ego.time );
-    trajectory.label = "obstacle avoidance: stop on active " + active_route_name + "_route";
-
-    if( accepted_stop_route != nullptr )
-    {
-        *accepted_stop_route = stop_route;
-    }
-
-    Behavior behavior;
-    behavior.trajectory = dynamics::conversions::to_ros_msg( trajectory );
-    behavior.modified_route = map::conversions::to_ros_msg( stop_route );
     return behavior;
 }
 
@@ -1486,169 +1325,11 @@ continue_active_avoidance(
         }
     }
 
-    // Before ego has committed to the shift (it has not yet physically begun the
-    // lateral offset), the maneuver must not pin ego to the modified route once
-    // its reason is gone. Re-enter the normal mission-route planning flow when,
-    // pre-commit, either the maneuver obstacle is no longer tracked, or the
-    // original mission route is now clear again (the obstacle moved out of its
-    // corridor). A fresh OA calculation then returns to the mission route when no
-    // replacement maneuver is needed. Once committed, the maneuver is driven to
-    // its release point regardless of a lost detection or a freed lane, so ego
-    // never snaps back to the original line mid-shift.
-    const bool tracked_maneuver_obstacle_visible =
-        !active_avoidance_state.obstacle_ids.empty()
-            ? std::any_of(
-                  active_avoidance_state.obstacle_ids.begin(),
-                  active_avoidance_state.obstacle_ids.end(),
-                  [&]( int obstacle_id )
-                  {
-                      return traffic_participants.participants.find( obstacle_id ) !=
-                             traffic_participants.participants.end();
-                  } )
-            : active_avoidance_state.obstacle_id >= 0 &&
-                  traffic_participants.participants.find(
-                      active_avoidance_state.obstacle_id ) !=
-                      traffic_participants.participants.end();
-
-    bool return_to_mission_pre_commit = false;
-    if( !active_avoidance_state.committed &&
-        !active_conflict.has_value() )
-    {
-        if( !tracked_maneuver_obstacle_visible )
-        {
-            return_to_mission_pre_commit = true;
-            active_avoidance_state.group_shrink_since_time =
-                std::numeric_limits<double>::quiet_NaN();
-        }
-        else
-        {
-            // Obstacle(s) still tracked. Re-check the mission route and drop the
-            // pre-commit maneuver in two cases:
-            //  1. the lane is fully free again (every blocker moved out of the
-            //     corridor) -> return to the mission line;
-            //  2. the group SHRANK -- the maneuver was planned for several
-            //     obstacles and at least one no longer blocks the mission route
-            //     (it vanished, or moved out of the corridor) while others remain
-            //     -- so the committed shift is over-sized. Re-plan from the
-            //     mission route for the remaining blockers (a tighter avoidance)
-            //     instead of driving the whole multi-object shift.
-            // Both are safe pre-commit: ego is still on the mission line (no
-            // lateral offset yet), so the reset + fresh plan is discontinuity-free.
-            const auto original_route_safety =
-                ::adore::planner::check_route_corridor_safety(
-                    route_with_signal,
-                    vehicle_state_dynamic,
-                    traffic_participants,
-                    planner.get_physical_vehicle_parameters(),
-                    params_for_obstacle_avoidance );
-
-            const bool mission_route_clear = !original_route_safety.has_conflict;
-
-            // How many of the planned maneuver obstacles still need the shift,
-            // i.e. still violate side_clearance to a mission-route-centered ego?
-            // Use the same side_clearance rule that grouped them (NOT the tighter
-            // ego_corridor_safety_margin corridor test), so an edge obstacle that
-            // was grouped but never trips the narrow corridor is not miscounted as
-            // "gone". A vanished obstacle is simply no longer among participants.
-            std::size_t still_blocking = 0;
-            for( const int maneuver_obstacle_id : active_avoidance_state.obstacle_ids )
-            {
-                const auto participant_it =
-                    traffic_participants.participants.find( maneuver_obstacle_id );
-                if( participant_it == traffic_participants.participants.end() )
-                {
-                    continue; // vanished -> no longer blocking
-                }
-                const bool has_side_clearance =
-                    ::adore::planner::participant_has_side_clearance_to_route_corridor(
-                        route_with_signal,
-                        participant_it->second,
-                        planner.get_physical_vehicle_parameters(),
-                        params_for_obstacle_avoidance );
-                if( !has_side_clearance )
-                {
-                    ++still_blocking; // still within side_clearance -> still needs the shift
-                }
-            }
-
-            const bool group_shrank =
-                active_avoidance_state.obstacle_ids.size() > 1 &&
-                still_blocking < active_avoidance_state.obstacle_ids.size();
-
-            // Debounce the shrink against perception flicker before acting.
-            if( group_shrank && !mission_route_clear )
-            {
-                if( !std::isfinite( active_avoidance_state.group_shrink_since_time ) )
-                {
-                    active_avoidance_state.group_shrink_since_time =
-                        vehicle_state_dynamic.time;
-                }
-            }
-            else
-            {
-                active_avoidance_state.group_shrink_since_time =
-                    std::numeric_limits<double>::quiet_NaN();
-            }
-
-            const bool shrink_confirmed =
-                group_shrank &&
-                std::isfinite( active_avoidance_state.group_shrink_since_time ) &&
-                ( vehicle_state_dynamic.time -
-                  active_avoidance_state.group_shrink_since_time ) >=
-                    std::max( 0.0,
-                              params_for_obstacle_avoidance.group_shrink_confirm_time );
-
-            if( shrink_confirmed && !mission_route_clear )
-            {
-                RCLCPP_INFO(
-                    rclcpp::get_logger( "Behaviors" ),
-                    "[OA][SHRINK] pre-commit group shrank (%zu of %zu planned "
-                    "obstacles still block); re-planning tighter avoidance",
-                    still_blocking,
-                    active_avoidance_state.obstacle_ids.size() );
-            }
-
-            return_to_mission_pre_commit = mission_route_clear || shrink_confirmed;
-        }
-    }
-
-    if( return_to_mission_pre_commit )
-    {
-        active_avoidance_state.reset();
-
-        if( auto ego_lane_behavior =
-                try_ego_lane_oncoming_stop_behavior(
-                    planner,
-                    route_with_signal,
-                    vehicle_state_dynamic,
-                    traffic_participants,
-                    params_for_obstacle_avoidance );
-            ego_lane_behavior.has_value() )
-        {
-            return ego_lane_behavior.value();
-        }
-
-        if( use_weather_comfort_settings )
-        {
-            return plan_weather_behavior(
-                planner,
-                route_with_signal,
-                vehicle_state_dynamic,
-                traffic_participants,
-                params_for_obstacle_avoidance,
-                weather_comfort_settings,
-                weather_label );
-        }
-
-        return plan_obstacle_avoidance_behavior(
-            planner,
-            route_with_signal,
-            vehicle_state_dynamic,
-            traffic_participants,
-            params_for_obstacle_avoidance,
-            active_avoidance_state );
-    }
-
+    // fix(oa): the maneuver commits immediately (committed = true above), so there
+    // is no pre-commit return-to-mission path. A static object (v <
+    // max_static_object_speed) that drops out of perception is treated as a glitch
+    // and the shift is held; the only return to the mission line is via release_s
+    // (obstacle passed) below, or a full stop when avoidance is no longer possible.
     const bool projection_valid =
         std::isfinite( ego_s_modified ) &&
         std::isfinite( ego_s_original );
@@ -1974,8 +1655,10 @@ plan_obstacle_avoidance_behavior(
         // but they must not activate a persistent avoidance state.
         if( oa_result.has_maneuver_bounds )
         {
-            // Fresh maneuver: start uncommitted. The commit latch is raised only
-            // once ego has physically begun the lateral shift.
+            // Fresh maneuver: recorded uncommitted here, but on fix(oa) the next
+            // continue_active_avoidance cycle commits it immediately (static
+            // object). The flag is kept only for consistency with the shared
+            // ActiveAvoidanceState; it drives no pre-commit behaviour on this branch.
             start_active_avoidance_state(
                 active_avoidance_state,
                 oa_result );
@@ -1984,7 +1667,7 @@ plan_obstacle_avoidance_behavior(
         else
         {
             // While the obstacle is still beyond braking range, do not force a stop
-            // trajectory: building one here (make_stop_on_active_route_behavior) can
+            // trajectory: building a route-stop-policy stop here can
             // false-fail its in-horizon stop proof when the stop point is far and
             // fall back to a last-resort hold (a v=0 freeze with no usable route
             // trajectory). try_plan_obstacle_avoidance already returned a valid
@@ -2043,9 +1726,9 @@ plan_obstacle_avoidance_behavior(
             // Brake to a clean stop before the obstacle on the same unified
             // brake-envelope used for the oncoming wait: coast at the current speed
             // (no acceleration, via the coast cap in apply_brake_envelope) then brake
-            // comfortably to far_stop_s. This replaces make_stop_on_active_route_behavior
-            // (route stop policy), whose hard reachable/unreachable switch produces the
-            // creep-vs-brake limit cycle around v0=0.5 seen on the final approach.
+            // comfortably to far_stop_s. This replaces the old route-stop-policy stop,
+            // whose hard reachable/unreachable switch produced the creep-vs-brake
+            // limit cycle around v0=0.5 seen on the final approach.
             return make_route_brake_in_place_behavior(
                 planner,
                 route_with_signal,
