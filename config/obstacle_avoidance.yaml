@@ -8,7 +8,11 @@
 
     # Object detection
     obstacle_avoidance.max_object_ahead: 80.0
-    obstacle_avoidance.max_static_object_speed: 0.5
+    # fix(oa) branch: only genuinely static objects trigger a lateral avoidance.
+    # The rosbags show parked cars report exactly 0 velocity and pedestrians
+    # ~1-2 m/s, so 0.1 (reserve for perception not reporting exactly 0) cleanly
+    # keeps pedestrians out of the shift -- they are braked for, not swerved around.
+    obstacle_avoidance.max_static_object_speed: 0.1
 
     # Speed hysteresis before an already-avoided obstacle stops being ignored
     obstacle_avoidance.ignored_obstacle_release_speed: 1.5

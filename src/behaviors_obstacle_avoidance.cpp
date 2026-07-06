@@ -1110,16 +1110,15 @@ continue_active_avoidance(
     const double ego_s_modified = ego_s_modified_opt.value();
     pinned_active_stop_s = ego_s_modified;
 
-    // Commit latch. Once ego has physically begun the lateral shift, the maneuver
-    // is committed: it is driven to its release point and a disappearing obstacle
-    // no longer snaps ego back to the original line. Sticky and only cleared by
-    // reset(), so a dynamic replan that moves shift_start_s cannot un-commit an
-    // in-progress shift.
-    if( std::isfinite( ego_s_modified ) &&
-        ego_s_modified >= active_avoidance_state.shift_start_s )
-    {
-        active_avoidance_state.committed = true;
-    }
+    // fix(oa) branch: commit as soon as a maneuver is active, not only once ego has
+    // physically begun the lateral shift. Once an avoidance is planned for a static
+    // object (v < max_static_object_speed), ego drives the modified route and is
+    // driven to release_s; it never flickers back to the mission line pre-commit and
+    // is replanned only from the modified route. A static object cannot leave the
+    // corridor, so a lost detection is a perception glitch, never a real departure --
+    // holding the maneuver is the safe response. The only return to the mission line
+    // is via release_s (ego has passed the obstacle).
+    active_avoidance_state.committed = true;
 
     // Oncoming-wait latch. Once we stop for an oncoming participant, keep holding
     // (pulled up at the avoided obstacle) until that participant has cleared the
@@ -1300,6 +1299,14 @@ continue_active_avoidance(
 
         if( is_new_conflict )
         {
+            // fix(oa) branch: replan ONLY from the route ego is actually driving
+            // (the modified route). The committed obstacles are ignored in detection
+            // (already cleared by the committed shift baked into the modified
+            // geometry), so the reshape is incremental. The mission-route fallback is
+            // deliberately removed: planning from the mission line rebuilds the shift
+            // from the original centerline and snaps ego back -- exactly the flicker
+            // we want gone. If no valid modified-route reshape exists, fall through to
+            // a stop on the active route instead of returning to the mission line.
             if( auto replanned_behavior =
                     try_dynamic_replan_from_route(
                         planner,
@@ -1309,26 +1316,6 @@ continue_active_avoidance(
                         traffic_participants,
                         params_for_obstacle_avoidance,
                         active_avoidance_state,
-                        &active_avoidance_state.obstacle_ids );
-                replanned_behavior.has_value() )
-            {
-                return replanned_behavior.value();
-            }
-
-            if( auto replanned_behavior =
-                    try_dynamic_replan_from_route(
-                        planner,
-                        route_with_signal,
-                        ego_s_original,
-                        vehicle_state_dynamic,
-                        traffic_participants,
-                        params_for_obstacle_avoidance,
-                        active_avoidance_state,
-                        // Keep the committed obstacle(s) in the merged group so the
-                        // route still clears them, but skip re-validating their
-                        // clearance from ego's transient mid-turn pose (that is the
-                        // spurious obj1 failure). Only the new obstacle is validated.
-                        /*additional_ignored_participant_ids=*/nullptr,
                         &active_avoidance_state.obstacle_ids );
                 replanned_behavior.has_value() )
             {
