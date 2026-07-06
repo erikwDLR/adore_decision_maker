@@ -134,11 +134,14 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
   params.lateral_shift_penalty_score = node.declare_parameter<double>( "obstacle_avoidance.lateral_shift_penalty_score", params.lateral_shift_penalty_score );
   params.opposite_lane_penalty_score = node.declare_parameter<double>( "obstacle_avoidance.opposite_lane_penalty_score", params.opposite_lane_penalty_score );
 
-  if( params.stop_before_obstacle <= params.front_clearance )
-  {
-    params.stop_before_obstacle =
-      params.front_clearance + std::max( 0.0, params.stop_adjustment_offset );
-  }
+  // stop_before_obstacle is the DURING-avoidance stop stand-off: ego may stop close
+  // to the obstacle (keeping a safety margin). It is intentionally NOT floored at
+  // front_clearance here. The former global mutation did apply that floor, which
+  // wrongly forced the during-avoidance stop (which reads this value verbatim) to be
+  // at least front_clearance + stop_adjustment_offset too. The PRE-SHIFT stop needs
+  // that floor so a shift stays possible after stopping, but it is applied locally in
+  // the planner (normalized_stop_before_obstacle), not globally, so the two stops can
+  // differ.
 
   return params;
 }
