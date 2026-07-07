@@ -44,19 +44,12 @@ required_traffic_participant_lookahead(
     std::max(
       std::max( 0.0, params.min_oncoming_speed_for_gap_check ),
       std::max( 0.0, params.min_oncoming_route_speed ) );
-  const double grouping_horizon =
-    std::max(
-      std::max( 0.0, params.cluster_hold_gap_s ),
-      std::max( 0.0, params.shift_hull_gap_s ) ) +
-    std::max( 0.0, params.front_clearance ) +
-    std::max( 0.0, params.rear_clearance );
 
   return std::max(
     { static_object_horizon,
       ego_lane_oncoming_horizon,
       modified_route_horizon,
-      prediction_distance_horizon,
-      static_object_horizon + grouping_horizon } );
+      prediction_distance_horizon } );
 }
 
 adore::planner::ObstacleAvoidanceParams
@@ -74,18 +67,14 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
   params.avoidance_lateral_accel = node.declare_parameter<double>( "obstacle_avoidance.avoidance_lateral_accel", params.avoidance_lateral_accel );
   params.min_avoidance_speed = node.declare_parameter<double>( "obstacle_avoidance.min_avoidance_speed", params.min_avoidance_speed );
   params.rear_clearance = node.declare_parameter<double>( "obstacle_avoidance.rear_clearance", params.rear_clearance );
-  params.group_shrink_confirm_time = node.declare_parameter<double>( "obstacle_avoidance.group_shrink_confirm_time", params.group_shrink_confirm_time );
   params.stop_before_obstacle = node.declare_parameter<double>( "obstacle_avoidance.stop_before_obstacle", params.stop_before_obstacle );
   params.in_lane_shift_enabled = node.declare_parameter<bool>( "obstacle_avoidance.in_lane_shift_enabled", params.in_lane_shift_enabled );
   params.adjacent_lane_enabled = node.declare_parameter<bool>( "obstacle_avoidance.adjacent_lane_enabled", params.adjacent_lane_enabled );
   params.opposite_lane_enabled = node.declare_parameter<bool>( "obstacle_avoidance.opposite_lane_enabled", params.opposite_lane_enabled );
-  params.clustering_enabled = node.declare_parameter<bool>( "obstacle_avoidance.clustering_enabled", params.clustering_enabled );
   params.enforce_drivable_area = node.declare_parameter<bool>( "obstacle_avoidance.enforce_drivable_area", params.enforce_drivable_area );
   params.max_speed_during_avoidance = node.declare_parameter<double>( "obstacle_avoidance.max_speed_during_avoidance", params.max_speed_during_avoidance );
   params.blinker_lead_distance = node.declare_parameter<double>( "obstacle_avoidance.blinker_lead_distance", params.blinker_lead_distance );
   params.validate_shifted_trajectory = node.declare_parameter<bool>( "obstacle_avoidance.validate_shifted_trajectory", params.validate_shifted_trajectory );
-  params.lateral_candidate_extra_steps = node.declare_parameter<int>( "obstacle_avoidance.lateral_candidate_extra_steps", params.lateral_candidate_extra_steps );
-  params.lateral_candidate_extra_step = node.declare_parameter<double>( "obstacle_avoidance.lateral_candidate_extra_step", params.lateral_candidate_extra_step );
   params.modified_route_safety_check_enabled = node.declare_parameter<bool>( "obstacle_avoidance.modified_route_safety_check_enabled", params.modified_route_safety_check_enabled );
   params.modified_route_max_check_distance = node.declare_parameter<double>( "obstacle_avoidance.modified_route_max_check_distance", params.modified_route_max_check_distance );
   params.modified_route_time_horizon = node.declare_parameter<double>( "obstacle_avoidance.modified_route_time_horizon", params.modified_route_time_horizon );
@@ -98,9 +87,6 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
   params.lane_s_overlap_slack = node.declare_parameter<double>( "obstacle_avoidance.lane_s_overlap_slack", params.lane_s_overlap_slack );
   params.lane_boundary_join_slack = node.declare_parameter<double>( "obstacle_avoidance.lane_boundary_join_slack", params.lane_boundary_join_slack );
   params.max_projection_distance_from_route = node.declare_parameter<double>( "obstacle_avoidance.max_projection_distance_from_route", params.max_projection_distance_from_route );
-  params.cluster_hold_gap_s = node.declare_parameter<double>( "obstacle_avoidance.cluster_hold_gap_s", params.cluster_hold_gap_s );
-  params.shift_hull_gap_s = node.declare_parameter<double>( "obstacle_avoidance.shift_hull_gap_s", params.shift_hull_gap_s );
-  params.enable_multi_candidate_route_shift = node.declare_parameter<bool>( "obstacle_avoidance.enable_multi_candidate_route_shift", params.enable_multi_candidate_route_shift );
 
   // Oncoming traffic gap-acceptance parameters
   params.oncoming_time_margin = node.declare_parameter<double>( "obstacle_avoidance.oncoming_time_margin", params.oncoming_time_margin );

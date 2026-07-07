@@ -659,14 +659,18 @@ try_dynamic_replan_from_route(
     const planner::ObstacleAvoidanceParams& params_for_obstacle_avoidance,
     planner::ActiveAvoidanceState& active_avoidance_state,
     const std::vector<int>* additional_ignored_participant_ids = nullptr,
-    const std::vector<int>* committed_obstacle_ids = nullptr,
-    double min_shift_magnitude = 0.0 )
+    double min_shift_magnitude = 0.0,
+    double shift_direction_sign = 0.0,
+    double held_shift_s_min = std::numeric_limits<double>::infinity(),
+    double held_shift_s_max = -std::numeric_limits<double>::infinity(),
+    double held_lateral_shift = 0.0 )
 {
     // Mid-maneuver replan for a new obstacle. try_plan sizes the entry ramp to the
     // available distance and the maneuver speed to the shift (physics), so a late
     // obstacle where ego is close still gets a fitting short ramp + matching slow
     // speed. The committed obstacle stays in the group but its clearance is not
-    // re-validated from ego's transient turn-in pose (committed_obstacle_ids).
+    // re-validated from ego's transient turn-in pose: obstacles overlapping the
+    // committed hold span (held_shift_*) are flagged inside the planner and skipped.
     const auto replan_result =
         ::adore::planner::try_plan_obstacle_avoidance(
             planner,
@@ -675,7 +679,10 @@ try_dynamic_replan_from_route(
             traffic_participants,
             params_for_obstacle_avoidance,
             additional_ignored_participant_ids,
-            committed_obstacle_ids );
+            shift_direction_sign,
+            held_shift_s_min,
+            held_shift_s_max,
+            held_lateral_shift );
 
     if( !replan_result.success ||
         !replan_result.has_maneuver_bounds )
@@ -1085,7 +1092,6 @@ continue_active_avoidance(
     // shifted ego, or an oncoming other-lane object during an in-lane shift) are skipped.
     std::optional<::adore::planner::RouteCorridorConflict> stop_conflict;
     std::optional<::adore::planner::RouteCorridorConflict> ahead_conflict;
-    std::vector<int> passed_ids; // obstacles ego is currently alongside / passing
 
     const auto prefer_more_urgent =
         [&]( const std::optional<::adore::planner::RouteCorridorConflict>& current,
@@ -1137,7 +1143,6 @@ continue_active_avoidance(
             if( conflict.object_s_min <= ego_front_s )
             {
                 // Straddling: ego is alongside the near edge, cannot widen -> stop.
-                passed_ids.push_back( conflict.participant_id );
                 if( prefer_more_urgent( stop_conflict, conflict ) )
                 {
                     stop_conflict = conflict;
@@ -1183,44 +1188,55 @@ continue_active_avoidance(
         return make_active_conflict_stop_behavior( stop_conflict.value() );
     }
 
-    // A static fragment fully ahead reveals the object is wider / longer than the
-    // current shift. Widen: replan from the driven route. The ignore + skip-clearance
-    // lists are computed fresh from position (passed_ids) so obstacles ego is passing
-    // are not re-triggered and not clearance-failed while ego turns in for the one
-    // ahead. Strict monotonic: adopt only a shift at least as large as the current one,
-    // so fragment flicker cannot narrow / oscillate the path.
+    // A new object ahead reveals the avoidance must extend to also clear it. Replan
+    // the WHOLE maneuver from the mission route (route_with_signal) in ONE pass and
+    // hold the committed shift geometrically -- NOT by tracking the committed object's
+    // id. The committed shift (its route s-span + magnitude, from active_avoidance_state)
+    // is rebuilt inside the planner as a synthetic "hold" obstacle, so it composes with
+    // the newly detected object in the mission frame: both keep a nonzero shift, the
+    // per-object bridge joins them into one continuous curve (identical to both objects
+    // visible from the start), and ego never dips back toward the lane between them.
+    // Because the hold is geometry, not an id lookup, it survives the real object
+    // dropping out of perception mid-shift -- detection stays purely geometric.
+    //
+    // Lock the replan to the current shift direction (shift_direction_sign) so it only
+    // ever widens the side ego is already going, never the opposite (which would pull
+    // ego back toward the object it is passing).
     if( ahead_conflict.has_value() )
     {
         static rclcpp::Clock driven_widen_log_clock{ RCL_STEADY_TIME };
         RCLCPP_INFO_THROTTLE(
             rclcpp::get_logger( "Behaviors" ), driven_widen_log_clock, 1000,
-            "[OA][DRIVEN] ahead intrusion id=%d s=[%.1f,%.1f] -> widen",
+            "[OA][DRIVEN] ahead intrusion id=%d s=[%.1f,%.1f] -> widen (mission replan)",
             ahead_conflict->participant_id,
             ahead_conflict->object_s_min,
             ahead_conflict->object_s_max );
 
-        const double current_shift_magnitude =
-            std::fabs( active_avoidance_state.lateral_shift );
+        const double shift_direction_sign =
+            active_avoidance_state.lateral_shift >= 0.0 ? 1.0 : -1.0;
 
         if( auto replanned_behavior =
                 try_dynamic_replan_from_route(
                     planner,
-                    active_route,
-                    ego_s_modified,
+                    route_with_signal,
+                    ego_s_original,
                     vehicle_state_dynamic,
                     traffic_participants,
                     params_for_obstacle_avoidance,
                     active_avoidance_state,
-                    &passed_ids,
-                    &passed_ids,
-                    current_shift_magnitude );
+                    nullptr,
+                    0.0,
+                    shift_direction_sign,
+                    active_avoidance_state.obstacle_s_min,
+                    active_avoidance_state.obstacle_s_max,
+                    active_avoidance_state.lateral_shift );
             replanned_behavior.has_value() )
         {
             return replanned_behavior.value();
         }
 
-        // No wider maneuver validated (or it would narrow the shift) -> brake on the
-        // driven route rather than snapping toward the mission line.
+        // No drivable extension validated -> brake on the driven route rather than
+        // snapping toward the mission line.
         return make_active_conflict_stop_behavior( ahead_conflict.value() );
     }
 
