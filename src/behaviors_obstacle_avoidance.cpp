@@ -659,7 +659,6 @@ try_dynamic_replan_from_route(
     const planner::ObstacleAvoidanceParams& params_for_obstacle_avoidance,
     planner::ActiveAvoidanceState& active_avoidance_state,
     const std::vector<int>* additional_ignored_participant_ids = nullptr,
-    double min_shift_magnitude = 0.0,
     double shift_direction_sign = 0.0,
     double held_shift_s_min = std::numeric_limits<double>::infinity(),
     double held_shift_s_max = -std::numeric_limits<double>::infinity(),
@@ -704,16 +703,9 @@ try_dynamic_replan_from_route(
         return std::nullopt;
     }
 
-    // Strict monotonic widen: a mid-maneuver reshape must never NARROW the committed
-    // shift (that would pull ego back toward the object and let fragment flicker
-    // oscillate the path). Reject a smaller shift; the caller then keeps the current
-    // route or brakes. Shrinking back out of the shift is a separate, deferred idea.
-    if( std::fabs( replan_result.lateral_shift ) + 1e-3 <
-        std::max( 0.0, min_shift_magnitude ) )
-    {
-        return std::nullopt;
-    }
-
+    // A mid-maneuver reshape never NARROWS the committed shift: the committed shift is
+    // re-injected as a synthetic "hold" obstacle (held_shift_*) and composed per object
+    // by MAX, so the replanned shift is geometrically floored at the committed magnitude.
     dynamics::Trajectory trajectory;
     double replan_ego_s =
         get_s_on_reference_line_segments(
@@ -1225,7 +1217,6 @@ continue_active_avoidance(
                     params_for_obstacle_avoidance,
                     active_avoidance_state,
                     nullptr,
-                    0.0,
                     shift_direction_sign,
                     active_avoidance_state.obstacle_s_min,
                     active_avoidance_state.obstacle_s_max,
