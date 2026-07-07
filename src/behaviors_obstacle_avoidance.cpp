@@ -121,7 +121,6 @@ obstacle_avoidance_label(
 // so existing unqualified call sites keep working.
 using planner::project_s_on_reference_line;
 using planner::start_active_avoidance_state;
-using planner::update_tracked_obstacle_envelopes;
 using planner::make_oncoming_monitor_conflict;
 using planner::static_or_slow_conflict_has_side_clearance;
 using planner::should_stop_for_active_conflict;
@@ -647,36 +646,6 @@ check_opposite_lane_monitor(
     return std::nullopt;
 }
 
-// Copy of the participant set with each maneuver obstacle grown to the maximum
-// object-local dimensions ever observed for it (ActiveAvoidanceState.tracked_-
-// obstacles). Planning and corridor checks projected the current pose with these
-// max dimensions, so an obstacle that turns out larger than first perceived is
-// avoided at its true size instead of the stale initial footprint. Pose is left
-// untouched; only body_length/body_width are enlarged (never shrunk).
-dynamics::TrafficParticipantSet
-make_max_hull_inflated_participants(
-    const dynamics::TrafficParticipantSet& traffic_participants,
-    const planner::ActiveAvoidanceState& active_avoidance_state )
-{
-    dynamics::TrafficParticipantSet inflated = traffic_participants;
-    for( const auto& envelope : active_avoidance_state.tracked_obstacles )
-    {
-        const auto participant_it =
-            inflated.participants.find( envelope.participant_id );
-        if( participant_it == inflated.participants.end() )
-        {
-            continue;
-        }
-        participant_it->second.physical_parameters.body_length =
-            std::max( participant_it->second.physical_parameters.body_length,
-                      envelope.max_length );
-        participant_it->second.physical_parameters.body_width =
-            std::max( participant_it->second.physical_parameters.body_width,
-                      envelope.max_width );
-    }
-    return inflated;
-}
-
 // Try to reshape the active maneuver from a base route (active modified or
 // mission). On success starts/refreshes the avoidance state and returns the
 // resulting Behavior; nullopt means keep the previous active route this cycle.
@@ -690,7 +659,8 @@ try_dynamic_replan_from_route(
     const planner::ObstacleAvoidanceParams& params_for_obstacle_avoidance,
     planner::ActiveAvoidanceState& active_avoidance_state,
     const std::vector<int>* additional_ignored_participant_ids = nullptr,
-    const std::vector<int>* committed_obstacle_ids = nullptr )
+    const std::vector<int>* committed_obstacle_ids = nullptr,
+    double min_shift_magnitude = 0.0 )
 {
     // Mid-maneuver replan for a new obstacle. try_plan sizes the entry ramp to the
     // available distance and the maneuver speed to the shift (physics), so a late
@@ -724,6 +694,16 @@ try_dynamic_replan_from_route(
             projection_hint_s,
             static_cast<int>( replan_result.mode ),
             replan_result.reason.c_str() );
+        return std::nullopt;
+    }
+
+    // Strict monotonic widen: a mid-maneuver reshape must never NARROW the committed
+    // shift (that would pull ego back toward the object and let fragment flicker
+    // oscillate the path). Reject a smaller shift; the caller then keeps the current
+    // route or brakes. Shrinking back out of the shift is a separate, deferred idea.
+    if( std::fabs( replan_result.lateral_shift ) + 1e-3 <
+        std::max( 0.0, min_shift_magnitude ) )
+    {
         return std::nullopt;
     }
 
@@ -1074,255 +1054,174 @@ continue_active_avoidance(
         return make_active_conflict_stop_behavior( monitor_conflict.value() );
     }
 
-    const auto active_route_safety =
+    // Stage 1: a single id-independent corridor pass on the DRIVEN (modified) route,
+    // with NO ignore list. A fragment the committed shift has cleared projects
+    // laterally out of the shifted corridor and never appears; only fragments that
+    // still intrude are returned, regardless of tracking id. This one pass replaces
+    // the former active_route_safety (id-ignore) + driven-corridor growth guard
+    // (max-hull) pair. Membership is decided by position each cycle, so re-id /
+    // fragmentation is handled by location, not identity.
+    const auto driven_safety =
         ::adore::planner::check_route_corridor_safety(
             active_route,
             vehicle_state_dynamic,
             traffic_participants,
             planner.get_physical_vehicle_parameters(),
-            params_for_obstacle_avoidance,
-            nullptr,
-            &active_avoidance_state.obstacle_ids );
-
-    std::optional<::adore::planner::RouteCorridorConflict> active_conflict;
-    if( active_route_safety.has_conflict )
-    {
-        active_conflict = active_route_safety.conflict;
-    }
-
-    if( active_conflict.has_value() &&
-        active_avoidance_state.in_lane &&
-        ::adore::planner::is_oncoming_other_lane_conflict(
-            active_conflict.value(),
-            planner.get_physical_vehicle_parameters(),
-            params_for_obstacle_avoidance ) )
-    {
-        active_conflict.reset();
-    }
-
-    if( active_conflict.has_value() &&
-        static_or_slow_conflict_has_side_clearance(
-            active_conflict.value(),
-            planner.get_physical_vehicle_parameters(),
-            params_for_obstacle_avoidance ) )
-    {
-        active_conflict.reset();
-    }
-
-    if( active_conflict.has_value() &&
-        active_conflict->object_class ==
-            ::adore::planner::RouteCorridorObjectClass::StaticOrSlow &&
-        std::isfinite( active_conflict->object_s_max ) &&
-        std::isfinite( ego_s_modified ) &&
-        active_conflict->object_s_max < ego_s_modified - 0.25 &&
-        !active_conflict->currently_overlaps_ego_footprint )
-    {
-        active_conflict.reset();
-    }
-
-    if( active_conflict.has_value() )
-    {
-        // A real conflict on the active route can be a newly visible
-        // obstacle. Try to reshape the modified route immediately;
-        // waiting until braking is mandatory makes the maneuver look
-        // artificially static.
-        const bool is_new_conflict = active_route_safety.has_conflict;
-
-        const bool stop_required =
-            should_stop_for_active_conflict(
-                active_route,
-                vehicle_state_dynamic,
-                planner.get_physical_vehicle_parameters(),
-                active_conflict.value(),
-                params_for_obstacle_avoidance );
-
-        if( is_new_conflict )
-        {
-            // fix(oa) branch: replan ONLY from the route ego is actually driving
-            // (the modified route). The committed obstacles are ignored in detection
-            // (already cleared by the committed shift baked into the modified
-            // geometry), so the reshape is incremental. The mission-route fallback is
-            // deliberately removed: planning from the mission line rebuilds the shift
-            // from the original centerline and snaps ego back -- exactly the flicker
-            // we want gone. If no valid modified-route reshape exists, fall through to
-            // a stop on the active route instead of returning to the mission line.
-            if( auto replanned_behavior =
-                    try_dynamic_replan_from_route(
-                        planner,
-                        active_route,
-                        ego_s_modified,
-                        vehicle_state_dynamic,
-                        traffic_participants,
-                        params_for_obstacle_avoidance,
-                        active_avoidance_state,
-                        &active_avoidance_state.obstacle_ids );
-                replanned_behavior.has_value() )
-            {
-                return replanned_behavior.value();
-            }
-        }
-
-        if( stop_required )
-        {
-            return make_active_conflict_stop_behavior( active_conflict.value() );
-        }
-    }
-
-    // Driven-corridor guard (committed maneuver only). Each cycle, check whether
-    // ANY object actually intrudes the corridor of the route ego is driving; if so
-    // re-plan fresh, regardless of participant id. This single check subsumes the
-    // old id-matched growth replan: it covers a maneuver obstacle that grew, one
-    // that shifted back into the path, and the same physical object reappearing
-    // under a NEW id (blind-spot re-id). The size input is the max-hull latched set
-    // (never under-estimate: perception refines an obstacle's size as ego
-    // approaches), so an obstacle larger than first reported is caught as soon as
-    // its true extent cuts the corridor. update_tracked_obstacle_envelopes keeps
-    // that latch; make_max_hull_inflated_participants rebuilds the set at max size.
-    if( active_avoidance_state.committed )
-    {
-        update_tracked_obstacle_envelopes(
-            active_avoidance_state,
-            traffic_participants,
             params_for_obstacle_avoidance );
 
-        const auto inflated_participants =
-            make_max_hull_inflated_participants(
-                traffic_participants,
-                active_avoidance_state );
+    const double ego_front_reach =
+        planner.get_physical_vehicle_parameters().wheelbase +
+        planner.get_physical_vehicle_parameters().front_axle_to_front_border;
+    const double ego_front_s = ego_s_modified + ego_front_reach;
 
-        const auto growth_safety =
-            ::adore::planner::check_route_corridor_safety(
-                active_route,
-                vehicle_state_dynamic,
-                inflated_participants,
-                planner.get_physical_vehicle_parameters(),
-                params_for_obstacle_avoidance );
+    // Classify every intruding conflict by its EDGES (consistent with the front-bumper
+    // scan, which gates on the far edge s_max). A Stopping condition wins over a widen.
+    //  - static, straddling (near edge s_min <= ego_front_s -> ego alongside it, no
+    //    room to develop a shift) -> stop;
+    //  - static, fully ahead (s_min > ego_front_s) -> widen (replan);
+    //  - moving object in the corridor -> stop if braking is warranted (OA cannot shift
+    //    around it). Opposite-lane oncoming timing is handled by the monitor above.
+    // Non-blocking conflicts (a static object still keeping side_clearance to the
+    // shifted ego, or an oncoming other-lane object during an in-lane shift) are skipped.
+    std::optional<::adore::planner::RouteCorridorConflict> stop_conflict;
+    std::optional<::adore::planner::RouteCorridorConflict> ahead_conflict;
+    std::vector<int> passed_ids; // obstacles ego is currently alongside / passing
 
-        // Guard the exact corridor ego is driving, regardless of participant id.
-        // If the intruding static object is still ahead of the front bumper, try a
-        // fresh replan. If it is already too close / alongside, re-planning by
-        // dropping the committed maneuver can snap ego toward the mission line, so
-        // brake on the current active route instead. Only objects fully behind ego
-        // are ignored.
-        const double ego_front_offset =
-            planner.get_physical_vehicle_parameters().wheelbase +
-            planner.get_physical_vehicle_parameters().front_axle_to_front_border;
-        const double ego_front_s = ego_s_modified + ego_front_offset;
-        const double ego_rear_s =
-            ego_s_modified -
-            planner.get_physical_vehicle_parameters().rear_border_to_rear_axle;
-
-        const auto conflict_fully_behind_ego =
-            [&]( const ::adore::planner::RouteCorridorConflict& conflict )
-            {
-                return std::isfinite( conflict.object_s_max ) &&
-                       std::isfinite( ego_rear_s ) &&
-                       conflict.object_s_max < ego_rear_s - 0.25 &&
-                       !conflict.currently_overlaps_ego_footprint;
-            };
-
-        std::optional<::adore::planner::RouteCorridorConflict> driven_conflict;
-        for( const auto& conflict : growth_safety.conflicts )
+    const auto prefer_more_urgent =
+        [&]( const std::optional<::adore::planner::RouteCorridorConflict>& current,
+             const ::adore::planner::RouteCorridorConflict& candidate )
         {
-            if( conflict.object_class !=
-                    ::adore::planner::RouteCorridorObjectClass::StaticOrSlow ||
-                ::adore::planner::is_oncoming_other_lane_conflict(
+            return !current.has_value() ||
+                   ( candidate.currently_overlaps_ego_footprint &&
+                     !current->currently_overlaps_ego_footprint ) ||
+                   ( candidate.currently_overlaps_ego_footprint ==
+                         current->currently_overlaps_ego_footprint &&
+                     candidate.distance_s < current->distance_s );
+        };
+
+    for( const auto& conflict : driven_safety.conflicts )
+    {
+        if( !std::isfinite( conflict.object_s_min ) ||
+            !std::isfinite( conflict.object_s_max ) )
+        {
+            continue;
+        }
+
+        // Oncoming other-lane traffic that keeps clear during an in-lane shift does
+        // not block (mirrors the previous active-conflict filter).
+        if( active_avoidance_state.in_lane &&
+            ::adore::planner::is_oncoming_other_lane_conflict(
+                conflict,
+                planner.get_physical_vehicle_parameters(),
+                params_for_obstacle_avoidance ) )
+        {
+            continue;
+        }
+
+        const bool is_static =
+            conflict.object_class ==
+            ::adore::planner::RouteCorridorObjectClass::StaticOrSlow;
+
+        if( is_static )
+        {
+            // A static object still keeping side_clearance to the shifted ego is
+            // already cleared by the maneuver -> not blocking.
+            if( static_or_slow_conflict_has_side_clearance(
                     conflict,
                     planner.get_physical_vehicle_parameters(),
-                    params_for_obstacle_avoidance ) ||
-                !std::isfinite( conflict.object_s_min ) ||
-                !std::isfinite( conflict.object_s_max ) ||
-                !std::isfinite( ego_s_modified ) ||
-                conflict_fully_behind_ego( conflict ) )
+                    params_for_obstacle_avoidance ) )
             {
                 continue;
             }
 
-            const bool prefer_conflict =
-                !driven_conflict.has_value() ||
-                ( conflict.currently_overlaps_ego_footprint &&
-                  !driven_conflict->currently_overlaps_ego_footprint ) ||
-                ( conflict.currently_overlaps_ego_footprint ==
-                    driven_conflict->currently_overlaps_ego_footprint &&
-                  conflict.distance_s < driven_conflict->distance_s );
-
-            if( prefer_conflict )
+            if( conflict.object_s_min <= ego_front_s )
             {
-                driven_conflict = conflict;
-            }
-        }
-
-        const bool driven_corridor_intrusion =
-            driven_conflict.has_value();
-        const bool driven_conflict_ahead_of_front =
-            growth_safety.has_conflict &&
-            driven_conflict.has_value() &&
-            driven_conflict->object_s_min > ego_front_s;
-
-        if( driven_corridor_intrusion )
-        {
-            static rclcpp::Clock guard_log_clock{ RCL_STEADY_TIME };
-            RCLCPP_INFO_THROTTLE(
-                rclcpp::get_logger( "Behaviors" ),
-                guard_log_clock,
-                1000,
-                "[OA][GUARD] object id=%d intrudes driven corridor "
-                "s=[%.1f,%.1f] l=[%.2f,%.2f]; %s",
-                driven_conflict->participant_id,
-                driven_conflict->object_s_min,
-                driven_conflict->object_s_max,
-                driven_conflict->object_l_min,
-                driven_conflict->object_l_max,
-                driven_conflict_ahead_of_front
-                    ? "re-planning fresh"
-                    : "braking on active route" );
-
-            if( !driven_conflict_ahead_of_front )
-            {
-                return make_active_conflict_stop_behavior( driven_conflict.value() );
-            }
-
-            // Re-plan from the route ego actually drives (the modified route), NOT
-            // the mission line -- planning from the mission line rebuilds the shift
-            // from the original centerline and snaps ego back toward it. This is the
-            // same driven-route path the new-obstacle case (active_conflict, attempt
-            // 1) already takes cleanly; the guard just has to take it too for a
-            // committed obstacle that MOVED (active_route_safety ignores committed
-            // ids, so a moved committed obstacle only surfaces here). Ignore every
-            // committed obstacle EXCEPT the intruder so detection locks onto the one
-            // that broke back into the driven corridor; the others stay cleared by
-            // the shift already baked into the modified geometry. NOTE: the base
-            // route keeps its mission-lane parent_id (no metadata reprojection), so
-            // the candidate machinery's opposite/adjacent/side reasoning -- which is
-            // derived from current_lane = ego's mission lane -- stays correct.
-            std::vector<int> committed_ignore_except_intruder;
-            committed_ignore_except_intruder.reserve(
-                active_avoidance_state.obstacle_ids.size() );
-            for( const int committed_id : active_avoidance_state.obstacle_ids )
-            {
-                if( committed_id != driven_conflict->participant_id )
+                // Straddling: ego is alongside the near edge, cannot widen -> stop.
+                passed_ids.push_back( conflict.participant_id );
+                if( prefer_more_urgent( stop_conflict, conflict ) )
                 {
-                    committed_ignore_except_intruder.push_back( committed_id );
+                    stop_conflict = conflict;
                 }
             }
-
-            if( auto replanned_behavior =
-                    try_dynamic_replan_from_route(
-                        planner,
-                        active_route,
-                        ego_s_modified,
-                        vehicle_state_dynamic,
-                        inflated_participants,
-                        params_for_obstacle_avoidance,
-                        active_avoidance_state,
-                        &committed_ignore_except_intruder );
-                replanned_behavior.has_value() )
+            else if( !ahead_conflict.has_value() ||
+                     conflict.distance_s < ahead_conflict->distance_s )
             {
-                return replanned_behavior.value();
+                // Fully ahead: room to widen the shift for it.
+                ahead_conflict = conflict;
             }
-
-            return make_active_conflict_stop_behavior( driven_conflict.value() );
         }
+        else
+        {
+            // Moving object in the driven corridor: OA cannot shift around it. Stop if
+            // braking is warranted (a crossing / entering vehicle or pedestrian during
+            // an in-lane or adjacent shift; opposite-lane oncoming is handled above).
+            if( should_stop_for_active_conflict(
+                    active_route,
+                    vehicle_state_dynamic,
+                    planner.get_physical_vehicle_parameters(),
+                    conflict,
+                    params_for_obstacle_avoidance ) &&
+                prefer_more_urgent( stop_conflict, conflict ) )
+            {
+                stop_conflict = conflict;
+            }
+        }
+    }
+
+    // A Stopping condition wins: ego is alongside an un-cleared static object, or a
+    // moving object requires braking. Brake on the driven route (no snap).
+    if( stop_conflict.has_value() )
+    {
+        static rclcpp::Clock driven_stop_log_clock{ RCL_STEADY_TIME };
+        RCLCPP_INFO_THROTTLE(
+            rclcpp::get_logger( "Behaviors" ), driven_stop_log_clock, 1000,
+            "[OA][DRIVEN] blocking conflict id=%d class=%d s=[%.1f,%.1f] -> stop",
+            stop_conflict->participant_id,
+            static_cast<int>( stop_conflict->object_class ),
+            stop_conflict->object_s_min,
+            stop_conflict->object_s_max );
+        return make_active_conflict_stop_behavior( stop_conflict.value() );
+    }
+
+    // A static fragment fully ahead reveals the object is wider / longer than the
+    // current shift. Widen: replan from the driven route. The ignore + skip-clearance
+    // lists are computed fresh from position (passed_ids) so obstacles ego is passing
+    // are not re-triggered and not clearance-failed while ego turns in for the one
+    // ahead. Strict monotonic: adopt only a shift at least as large as the current one,
+    // so fragment flicker cannot narrow / oscillate the path.
+    if( ahead_conflict.has_value() )
+    {
+        static rclcpp::Clock driven_widen_log_clock{ RCL_STEADY_TIME };
+        RCLCPP_INFO_THROTTLE(
+            rclcpp::get_logger( "Behaviors" ), driven_widen_log_clock, 1000,
+            "[OA][DRIVEN] ahead intrusion id=%d s=[%.1f,%.1f] -> widen",
+            ahead_conflict->participant_id,
+            ahead_conflict->object_s_min,
+            ahead_conflict->object_s_max );
+
+        const double current_shift_magnitude =
+            std::fabs( active_avoidance_state.lateral_shift );
+
+        if( auto replanned_behavior =
+                try_dynamic_replan_from_route(
+                    planner,
+                    active_route,
+                    ego_s_modified,
+                    vehicle_state_dynamic,
+                    traffic_participants,
+                    params_for_obstacle_avoidance,
+                    active_avoidance_state,
+                    &passed_ids,
+                    &passed_ids,
+                    current_shift_magnitude );
+            replanned_behavior.has_value() )
+        {
+            return replanned_behavior.value();
+        }
+
+        // No wider maneuver validated (or it would narrow the shift) -> brake on the
+        // driven route rather than snapping toward the mission line.
+        return make_active_conflict_stop_behavior( ahead_conflict.value() );
     }
 
     // fix(oa): the maneuver commits immediately (committed = true above), so there
