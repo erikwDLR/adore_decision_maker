@@ -48,22 +48,6 @@ namespace behavior
         dynamics::TrafficSignalSet traffic_signal_set = dynamics::conversions::to_cpp_type( traffic_signals );
         auto route_with_signal = planner.compute_traffic_light_behavior( vehicle_state_dynamic, route, traffic_signal_set );
 
-        // Hard OA bypass: disabling obstacle avoidance must also cancel a
-        // previously active maneuver and skip every OA monitor, stop-hold and
-        // weather/OA dispatch below. The disabled branch plans only the normal
-        // driving mission on the original route (including traffic signals).
-        if( !params_for_obstacle_avoidance.enabled )
-        {
-            active_avoidance_state.reset();
-            return plan_obstacle_avoidance_behavior(
-                planner,
-                route_with_signal,
-                vehicle_state_dynamic,
-                traffic_participants,
-                params_for_obstacle_avoidance,
-                active_avoidance_state );
-        }
-
         // Determine weather-based speed limitation once.
         bool use_weather_comfort_settings = false;
         std::string weather_label;
@@ -85,6 +69,50 @@ namespace behavior
             }
         }
 
+        // Weather is a speed overlay, not a competing behavior. Compose it with
+        // traffic-light handling before both initial and active obstacle
+        // avoidance so adverse weather never disables detection or replanning.
+        auto route_for_planning = route_with_signal;
+        if( use_weather_comfort_settings )
+        {
+            for( auto& [s, point] : route_for_planning.reference_line )
+            {
+                static_cast<void>( s );
+                point.max_speed =
+                    std::min(
+                        point.max_speed.value_or(
+                            std::numeric_limits<double>::infinity() ),
+                        weather_comfort_settings.max_speed );
+            }
+        }
+
+        const auto with_weather_label =
+            [&]( Behavior behavior )
+            {
+                if( use_weather_comfort_settings &&
+                    !behavior.trajectory.label.empty() )
+                {
+                    behavior.trajectory.label +=
+                        " (" + weather_label + ")";
+                }
+                return behavior;
+            };
+
+        // Hard OA bypass: disabling obstacle avoidance cancels a previously
+        // active maneuver, while retaining traffic-light and weather overlays.
+        if( !params_for_obstacle_avoidance.enabled )
+        {
+            active_avoidance_state.reset();
+            return with_weather_label(
+                plan_obstacle_avoidance_behavior(
+                    planner,
+                    route_for_planning,
+                    vehicle_state_dynamic,
+                    traffic_participants,
+                    params_for_obstacle_avoidance,
+                    active_avoidance_state ) );
+        }
+
         // -------------------------------------------------------------------------
         // OA invariant:
         // The decision maker never publishes free-space emergency trajectories.
@@ -94,13 +122,13 @@ namespace behavior
         //
         // Persistent obstacle avoidance maneuver.
         //
-        // If an OA maneuver is active and committed (ego has begun the lateral
-        // shift), keep driving the stored modified route until the ego vehicle has
-        // passed the release point. Before commitment, a vanished maneuver obstacle
-        // instead returns immediately to fresh planning from the mission route. If a new obstacle
-        // conflicts with the active modified route through the generic route-
-        // corridor safety check, first try to replan a new modified route; fall
-        // back to a route speed-profile stop only if no validated replan exists.
+        // Keep driving the stored modified route until the ego vehicle has passed
+        // the release point. Persistent obstacle hulls prevent a temporarily
+        // vanished or fragmented detection from collapsing the route. If a new
+        // obstacle conflicts with the active modified route through the generic
+        // route-corridor safety check, first try to extend the modified route;
+        // fall back to a route speed-profile stop only if no validated replan
+        // exists.
         //
         // Opposite-lane monitor conflicts are handled more conservatively: they
         // do not trigger active replanning. Before commitment, an oncoming
@@ -113,9 +141,8 @@ namespace behavior
             return continue_active_avoidance(
                 planner,
                 vehicle_state_dynamic,
-                route_with_signal,
+                route_for_planning,
                 traffic_participants,
-                traffic_signal_set,
                 params_for_obstacle_avoidance,
                 use_weather_comfort_settings,
                 weather_comfort_settings,
@@ -126,34 +153,24 @@ namespace behavior
         if( auto ego_lane_behavior =
                 try_ego_lane_oncoming_stop_behavior(
                     planner,
-                    route_with_signal,
+                    route_for_planning,
                     vehicle_state_dynamic,
                     traffic_participants,
                     params_for_obstacle_avoidance );
             ego_lane_behavior.has_value() )
         {
-            return ego_lane_behavior.value();
+            return with_weather_label(
+                ego_lane_behavior.value() );
         }
 
-        if( use_weather_comfort_settings )
-        {
-            return plan_weather_behavior(
+        return with_weather_label(
+            plan_obstacle_avoidance_behavior(
                 planner,
-                route_with_signal,
+                route_for_planning,
                 vehicle_state_dynamic,
                 traffic_participants,
                 params_for_obstacle_avoidance,
-                weather_comfort_settings,
-                weather_label );
-        }
-
-        return plan_obstacle_avoidance_behavior(
-            planner,
-            route_with_signal,
-            vehicle_state_dynamic,
-            traffic_participants,
-            params_for_obstacle_avoidance,
-            active_avoidance_state );
+                active_avoidance_state ) );
     }
 
     Behavior driving_unstructured(

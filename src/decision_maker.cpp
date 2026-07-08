@@ -18,8 +18,6 @@
 #include "behaviors.hpp"
 #include "conditions.hpp"
 
-#include <adore_math/distance.h>
-
 #include <algorithm>
 
 namespace adore
@@ -41,9 +39,7 @@ required_traffic_participant_lookahead(
       : 0.0;
   const double prediction_distance_horizon =
     std::max( 0.0, params.prediction_time_horizon ) *
-    std::max(
-      std::max( 0.0, params.min_oncoming_speed_for_gap_check ),
-      std::max( 0.0, params.min_oncoming_route_speed ) );
+    std::max( 0.0, params.max_expected_participant_speed );
 
   return std::max(
     { static_object_horizon,
@@ -93,9 +89,11 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
   params.min_ego_speed_for_gap_check = node.declare_parameter<double>( "obstacle_avoidance.min_ego_speed_for_gap_check", params.min_ego_speed_for_gap_check );
   params.min_oncoming_speed_for_gap_check = node.declare_parameter<double>( "obstacle_avoidance.min_oncoming_speed_for_gap_check", params.min_oncoming_speed_for_gap_check );
   params.min_oncoming_route_speed = node.declare_parameter<double>( "obstacle_avoidance.min_oncoming_route_speed", params.min_oncoming_route_speed );
+  params.max_expected_participant_speed = node.declare_parameter<double>( "obstacle_avoidance.max_expected_participant_speed", params.max_expected_participant_speed );
   params.prediction_time_horizon = node.declare_parameter<double>( "obstacle_avoidance.prediction_time_horizon", params.prediction_time_horizon );
   params.oncoming_safety_distance_front = node.declare_parameter<double>( "obstacle_avoidance.oncoming_safety_distance_front", params.oncoming_safety_distance_front );
   params.oncoming_safety_distance_rear = node.declare_parameter<double>( "obstacle_avoidance.oncoming_safety_distance_rear", params.oncoming_safety_distance_rear );
+  params.oncoming_detection_hold_time = node.declare_parameter<double>( "obstacle_avoidance.oncoming_detection_hold_time", params.oncoming_detection_hold_time );
   // Ego-lane oncoming stop behavior parameters
   params.ego_lane_oncoming_stop_enabled = node.declare_parameter<bool>( "obstacle_avoidance.ego_lane_oncoming_stop_enabled", params.ego_lane_oncoming_stop_enabled );
   params.ego_lane_oncoming_max_distance = node.declare_parameter<double>( "obstacle_avoidance.ego_lane_oncoming_max_distance", params.ego_lane_oncoming_max_distance );
@@ -184,20 +182,10 @@ void DecisionMaker::setup_subscribers()
                                       [this](const adore_ros2_msgs::msg::Route& msg) {
                                         auto new_route = map::conversions::to_cpp_type(msg);
 
-                                        // A new mission invalidates the stored modified route of an
-                                        // active avoidance maneuver; keeping it would make ego follow
-                                        // (or brake on) a route that no longer matches the mission.
-                                        if( active_avoidance_state.active && latest_route.has_value() )
-                                        {
-                                          const double destination_shift =
-                                            adore::math::distance_2d( latest_route->destination, new_route.destination );
-
-                                          if( destination_shift > 1.0 )
-                                          {
-                                            active_avoidance_state.reset();
-                                          }
-                                        }
-
+                                        // Active OA compares the complete route geometry in the
+                                        // planning cycle. Do not reset here: an asynchronous reset
+                                        // during a lateral shift would snap ego to the new mission
+                                        // route instead of braking on its currently tracked route.
                                         latest_route = new_route;
                                       });
 
@@ -352,6 +340,7 @@ behavior::Behavior DecisionMaker::choose_and_plan_driving_behavior()
     needs_to_avoid_safety_corridor
   )
   {
+    active_avoidance_state.reset();
     return behavior::avoiding_safety_corridor(
                                 planner,
                                 latest_vehicle_state_dynamic.value(),
@@ -364,6 +353,7 @@ behavior::Behavior DecisionMaker::choose_and_plan_driving_behavior()
       must_drive_unstructured &&
       has_localization )
   {
+    active_avoidance_state.reset();
     return behavior::driving_unstructured(
                                 unstructured_planner,
                                 latest_vehicle_state_dynamic.value(),
@@ -379,6 +369,7 @@ behavior::Behavior DecisionMaker::choose_and_plan_driving_behavior()
       needs_remote_operator_assitance
     )
   {
+    active_avoidance_state.reset();
     return behavior::remote_operations(
                                 planner,
                                 latest_vehicle_state_dynamic.value(),
@@ -397,6 +388,7 @@ behavior::Behavior DecisionMaker::choose_and_plan_driving_behavior()
 
   )
   {
+    active_avoidance_state.reset();
     return behavior::driving_mission_following_managed(
                   planner,
                   latest_vehicle_state_dynamic.value(),
@@ -428,6 +420,7 @@ behavior::Behavior DecisionMaker::choose_and_plan_driving_behavior()
       odd_conditions_satisfied
   )
   {
+    active_avoidance_state.reset();
     return behavior::waiting_for_mission(
                                 planner,
                                 latest_vehicle_state_dynamic.value(),
@@ -440,6 +433,7 @@ behavior::Behavior DecisionMaker::choose_and_plan_driving_behavior()
     has_mission
   )
   {
+    active_avoidance_state.reset();
     return behavior::minimum_risk(
                                   planner, 
                                   latest_vehicle_state_dynamic.value(), 
@@ -449,6 +443,7 @@ behavior::Behavior DecisionMaker::choose_and_plan_driving_behavior()
                               );
   }
 
+  active_avoidance_state.reset();
   return behavior::emergency(planner, latest_vehicle_state_dynamic);
 }
 

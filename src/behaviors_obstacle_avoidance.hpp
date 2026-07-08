@@ -32,15 +32,13 @@ namespace behavior
 
 // Active obstacle-avoidance maneuver handling: follow and monitor the stored
 // modified route, replan or stop on new/oncoming conflicts, and return to fresh
-// mission-route planning after passing the obstacle, or (before the shift is
-// committed) after losing the maneuver obstacle.
+// mission-route planning after passing the persistent obstacle hulls.
 Behavior
 continue_active_avoidance(
     planner::TrajectoryPlanner& planner,
     const dynamics::VehicleStateDynamic& vehicle_state_dynamic,
     const map::Route& route_with_signal,
     const dynamics::TrafficParticipantSet& traffic_participants,
-    const dynamics::TrafficSignalSet& traffic_signals,
     const planner::ObstacleAvoidanceParams& params_for_obstacle_avoidance,
     bool use_weather_comfort_settings,
     const dynamics::ComfortSettings& weather_comfort_settings,
@@ -56,17 +54,6 @@ try_ego_lane_oncoming_stop_behavior(
     const dynamics::VehicleStateDynamic& vehicle_state_dynamic,
     const dynamics::TrafficParticipantSet& traffic_participants,
     const planner::ObstacleAvoidanceParams& params_for_obstacle_avoidance );
-
-// Reduced-speed driving under adverse weather.
-Behavior
-plan_weather_behavior(
-    planner::TrajectoryPlanner& planner,
-    const map::Route& route_with_signal,
-    const dynamics::VehicleStateDynamic& vehicle_state_dynamic,
-    const dynamics::TrafficParticipantSet& traffic_participants,
-    const planner::ObstacleAvoidanceParams& params_for_obstacle_avoidance,
-    const dynamics::ComfortSettings& weather_comfort_settings,
-    const std::string& weather_label );
 
 // Plan a new obstacle-avoidance maneuver (shift or stop) when none is active.
 Behavior

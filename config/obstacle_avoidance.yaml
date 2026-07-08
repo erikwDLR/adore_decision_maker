@@ -18,7 +18,7 @@
     obstacle_avoidance.ignored_obstacle_release_speed: 1.5
 
     # Ego-route relevance corridor
-    obstacle_avoidance.ego_corridor_safety_margin: 0.3
+    obstacle_avoidance.ego_corridor_safety_margin: 0.5
 
     # Real lateral object clearance
     obstacle_avoidance.side_clearance: 1.0
@@ -94,12 +94,18 @@
     # Minimum route-aligned speed for oncoming participant
     obstacle_avoidance.min_oncoming_route_speed: 1.0
 
+    # Participant retention distance for the prediction horizon
+    obstacle_avoidance.max_expected_participant_speed: 20.0
+
     # Time horizon for predicting participant trajectories
     obstacle_avoidance.prediction_time_horizon: 15.0
 
     # Safety distances during oncoming conflict
     obstacle_avoidance.oncoming_safety_distance_front: 2.0
     obstacle_avoidance.oncoming_safety_distance_rear: 2.0
+
+    # Bridge short tracker dropouts while waiting for oncoming traffic
+    obstacle_avoidance.oncoming_detection_hold_time: 0.75
 
     # --------------------------------------------------------------------------
     # Ego-lane oncoming stop behavior

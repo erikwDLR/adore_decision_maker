@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <cmath>
 #include <exception>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <string>
@@ -32,18 +33,6 @@ namespace behavior
 {
 namespace
 {
-
-void
-append_unique_ids( std::vector<int>& target, const std::vector<int>& source )
-{
-    for( const int id : source )
-    {
-        if( std::find( target.begin(), target.end(), id ) == target.end() )
-        {
-            target.push_back( id );
-        }
-    }
-}
 
 // Gate for the directional turn-signal suffix. The indicator is derived
 // downstream (trajectory_tracker) purely from the "... left)" / "... right)"
@@ -161,6 +150,40 @@ apply_route_max_speed_cap( const map::Route& route, double max_speed )
 }
 
 map::Route
+apply_live_speed_overlays(
+    const map::Route& geometry_route,
+    const map::Route& live_route )
+{
+    map::Route overlaid = geometry_route;
+    if( live_route.reference_line.empty() )
+    {
+        return overlaid;
+    }
+
+    for( auto& [s, point] : overlaid.reference_line )
+    {
+        auto live_it = live_route.reference_line.lower_bound( s );
+        if( live_it == live_route.reference_line.end() )
+        {
+            live_it = std::prev( live_route.reference_line.end() );
+        }
+        else if( live_it != live_route.reference_line.begin() )
+        {
+            const auto previous = std::prev( live_it );
+            if( std::fabs( previous->first - s ) <
+                std::fabs( live_it->first - s ) )
+            {
+                live_it = previous;
+            }
+        }
+
+        point.max_speed = live_it->second.max_speed;
+    }
+
+    return overlaid;
+}
+
+map::Route
 apply_active_avoidance_speed_profile(
     const map::Route& active_route,
     double ego_s,
@@ -186,28 +209,19 @@ apply_active_avoidance_speed_profile(
         ego_v );
 }
 
-// Copy of params with max_speed_during_avoidance sized (physics) to the maneuver
-// shift and its FIXED entry-ramp length (obstacle_s_min - shift_start_s), so a
-// re-applied avoidance speed profile matches what try_plan validated instead of
-// overwriting it with the fixed cap (see planner::avoidance_speed_for_shift).
-// Must use the maneuver ramp, NOT the shrinking ego->obstacle distance, otherwise
-// the sized speed would keep dropping as ego approaches and ego would crawl.
+// Copy of params carrying the speed that was validated together with the
+// selected persistent geometry. Re-deriving it from a group's earliest obstacle
+// after a later extension would couple the new maneuver back to the old ramp.
 static planner::ObstacleAvoidanceParams
-params_with_sized_avoidance_speed(
+params_with_selected_avoidance_speed(
     const planner::ObstacleAvoidanceParams& params,
-    const dynamics::PhysicalVehicleParameters& vehicle_params,
-    double entry_ramp_length,
-    double lateral_shift )
+    double selected_speed )
 {
     auto sized = params;
-    const double ego_front_offset =
-        vehicle_params.wheelbase + vehicle_params.front_axle_to_front_border;
-    const double ramp =
-        ::adore::planner::avoidance_ramp_length(
-            entry_ramp_length, ego_front_offset, params );
-    sized.max_speed_during_avoidance =
-        ::adore::planner::avoidance_speed_for_shift(
-            ramp, lateral_shift, params );
+    if( std::isfinite( selected_speed ) && selected_speed >= 0.0 )
+    {
+        sized.max_speed_during_avoidance = selected_speed;
+    }
     return sized;
 }
 
@@ -645,18 +659,17 @@ try_dynamic_replan_from_route(
     const dynamics::TrafficParticipantSet& traffic_participants,
     const planner::ObstacleAvoidanceParams& params_for_obstacle_avoidance,
     planner::ActiveAvoidanceState& active_avoidance_state,
-    const std::vector<int>* additional_ignored_participant_ids = nullptr,
-    double shift_direction_sign = 0.0,
-    double held_shift_s_min = std::numeric_limits<double>::infinity(),
-    double held_shift_s_max = -std::numeric_limits<double>::infinity(),
-    double held_lateral_shift = 0.0 )
+    const std::vector<int>* forced_participant_ids = nullptr,
+    double shift_direction_sign = 0.0 )
 {
-    // Mid-maneuver replan for a new obstacle. try_plan sizes the entry ramp to the
-    // available distance and the maneuver speed to the shift (physics), so a late
-    // obstacle where ego is close still gets a fitting short ramp + matching slow
-    // speed. The committed obstacle stays in the group but its clearance is not
-    // re-validated from ego's transient turn-in pose: obstacles overlapping the
-    // committed hold span (held_shift_*) are flagged inside the planner and skipped.
+    // Rebuild from the fixed mission-route baseline. Previously accepted object
+    // hulls stay frozen in that frame; participants selected by the corridor check
+    // on the driven route are forced into the group even when they sit outside the
+    // original mission-route trigger corridor.
+    const auto* committed_contributions =
+        active_avoidance_state.committed_contributions.empty()
+            ? nullptr
+            : &active_avoidance_state.committed_contributions;
     const auto replan_result =
         ::adore::planner::try_plan_obstacle_avoidance(
             planner,
@@ -664,11 +677,9 @@ try_dynamic_replan_from_route(
             vehicle_state_dynamic,
             traffic_participants,
             params_for_obstacle_avoidance,
-            additional_ignored_participant_ids,
             shift_direction_sign,
-            held_shift_s_min,
-            held_shift_s_max,
-            held_lateral_shift );
+            committed_contributions,
+            forced_participant_ids );
 
     if( !replan_result.success ||
         !replan_result.has_maneuver_bounds )
@@ -690,9 +701,9 @@ try_dynamic_replan_from_route(
         return std::nullopt;
     }
 
-    // A mid-maneuver reshape never NARROWS the committed shift: the committed shift is
-    // re-injected as a synthetic "hold" obstacle (held_shift_*) and composed per object
-    // by MAX, so the replanned shift is geometrically floored at the committed magnitude.
+    // A mid-maneuver reshape never narrows an accepted object hull: committed
+    // contributions are rebuilt from the mission frame and observations only
+    // expand their bounds. Per-object shifts are composed by max magnitude.
     dynamics::Trajectory trajectory;
     double replan_ego_s =
         get_s_on_reference_line_segments(
@@ -711,11 +722,9 @@ try_dynamic_replan_from_route(
     // recompute it (same helper) instead of letting the re-apply overwrite the
     // slow validated speed with the fixed cap.
     const auto replan_params =
-        params_with_sized_avoidance_speed(
+        params_with_selected_avoidance_speed(
             params_for_obstacle_avoidance,
-            planner.get_physical_vehicle_parameters(),
-            replan_result.obstacle_s_min - replan_result.shift_start_s,
-            replan_result.lateral_shift );
+            replan_result.avoidance_speed );
 
     auto replan_route_for_planning =
         apply_active_avoidance_speed_profile(
@@ -747,20 +756,12 @@ try_dynamic_replan_from_route(
         return std::nullopt;
     }
 
+    const auto mission_route_baseline =
+        active_avoidance_state.mission_route_baseline;
     start_active_avoidance_state(
         active_avoidance_state,
-        replan_result );
-    if( additional_ignored_participant_ids != nullptr )
-    {
-        append_unique_ids(
-            active_avoidance_state.obstacle_ids,
-            *additional_ignored_participant_ids );
-        append_unique_ids(
-            active_avoidance_state.maneuver.obstacle_ids,
-            *additional_ignored_participant_ids );
-    }
-    active_avoidance_state.modified_route =
-        replan_route_for_planning;
+        replan_result,
+        mission_route_baseline );
 
     // Seed the monotonic-s ratchet on the freshly committed route instead of
     // leaving it at NaN (start_active_avoidance_state resets it). replan_ego_s
@@ -806,23 +807,18 @@ continue_active_avoidance(
     const dynamics::VehicleStateDynamic& vehicle_state_dynamic,
     const map::Route& route_with_signal,
     const dynamics::TrafficParticipantSet& traffic_participants,
-    const dynamics::TrafficSignalSet& traffic_signals,
     const planner::ObstacleAvoidanceParams& params_for_obstacle_avoidance,
     bool use_weather_comfort_settings,
     const dynamics::ComfortSettings& weather_comfort_settings,
     const std::string& weather_label,
     planner::ActiveAvoidanceState& active_avoidance_state )
 {
+    // Geometry is persistent, speed overlays are not. Copy current mission,
+    // signal and weather speed values onto the stored avoidance geometry.
     auto active_route =
-        !active_avoidance_state.base_modified_route.reference_line.empty()
-            ? active_avoidance_state.base_modified_route
-            : active_avoidance_state.modified_route;
-
-    // The stored modified route was created from a signal snapshot
-    // at maneuver start. Re-apply the live traffic-signal state each
-    // cycle so a signal that turned red during the maneuver still
-    // produces a stop on the route ego is actually following.
-    active_route = planner.compute_traffic_light_behavior( vehicle_state_dynamic, active_route, traffic_signals );
+        apply_live_speed_overlays(
+            active_avoidance_state.base_modified_route,
+            route_with_signal );
 
     // Pinned monotonic modified-route s, set once it is computed below. The
     // active-maneuver stop builders brake on the route ego is already tracking
@@ -918,6 +914,36 @@ continue_active_avoidance(
                 brake_label );
         };
 
+    if( !::adore::planner::routes_have_compatible_geometry(
+            active_avoidance_state.mission_route_baseline,
+            route_with_signal ) )
+    {
+        // Never reinterpret persistent route-s hulls in a different mission
+        // frame. Finish braking on the geometry ego is already tracking; once
+        // stopped, discard the old state and plan afresh on the new mission.
+        if( std::fabs( vehicle_state_dynamic.vx ) > 0.2 )
+        {
+            return make_active_stop_behavior(
+                "driving mission (stopping for changed route)" );
+        }
+
+        active_avoidance_state.reset();
+        auto replanned_behavior = plan_obstacle_avoidance_behavior(
+            planner,
+            route_with_signal,
+            vehicle_state_dynamic,
+            traffic_participants,
+            params_for_obstacle_avoidance,
+            active_avoidance_state );
+        if( use_weather_comfort_settings &&
+            !replanned_behavior.trajectory.label.empty() )
+        {
+            replanned_behavior.trajectory.label +=
+                " (" + weather_label + ")";
+        }
+        return replanned_behavior;
+    }
+
     // Update the ego progress on the modified route before any active-stop or
     // oncoming-wait path can return. The vehicle can travel a substantial
     // distance while braking before it reaches the wait position. If
@@ -950,16 +976,6 @@ continue_active_avoidance(
 
     const double ego_s_modified = ego_s_modified_opt.value();
     pinned_active_stop_s = ego_s_modified;
-
-    // fix(oa) branch: commit as soon as a maneuver is active, not only once ego has
-    // physically begun the lateral shift. Once an avoidance is planned for a static
-    // object (v < max_static_object_speed), ego drives the modified route and is
-    // driven to release_s; it never flickers back to the mission line pre-commit and
-    // is replanned only from the modified route. A static object cannot leave the
-    // corridor, so a lost detection is a perception glitch, never a real departure --
-    // holding the maneuver is the safe response. The only return to the mission line
-    // is via release_s (ego has passed the obstacle).
-    active_avoidance_state.committed = true;
 
     // Oncoming-wait latch. Once we stop for an oncoming participant, keep holding
     // (pulled up at the avoided obstacle) until that participant has cleared the
@@ -1015,10 +1031,46 @@ continue_active_avoidance(
         }
         else
         {
-            // A participant that is no longer perceived is gone: release the latch
-            // immediately. The vehicle detects present objects directly, so an
-            // absent detection is treated as an absent object, not bridged.
-            release_wait = true;
+            // Re-identification may assign a different id. Before aging the
+            // latch, let the geometric monitor reacquire any oncoming vehicle
+            // that still threatens the same conflict interval.
+            const auto reacquired =
+                ::adore::planner::monitor_active_obstacle_avoidance_maneuver(
+                    active_route,
+                    vehicle_state_dynamic,
+                    traffic_participants,
+                    active_avoidance_state.maneuver,
+                    planner.get_physical_vehicle_parameters(),
+                    params_for_obstacle_avoidance,
+                    nullptr );
+
+            if( reacquired.oncoming.conflict &&
+                reacquired.oncoming.participant_id >= 0 )
+            {
+                active_avoidance_state.oncoming_wait_participant_id =
+                    reacquired.oncoming.participant_id;
+                active_avoidance_state.oncoming_wait_last_seen_time =
+                    vehicle_state_dynamic.time;
+            }
+            else
+            {
+                if( !std::isfinite(
+                        active_avoidance_state.oncoming_wait_last_seen_time ) )
+                {
+                    active_avoidance_state.oncoming_wait_last_seen_time =
+                        vehicle_state_dynamic.time;
+                }
+
+                const double missing_time =
+                    vehicle_state_dynamic.time -
+                    active_avoidance_state.oncoming_wait_last_seen_time;
+                release_wait =
+                    std::isfinite( missing_time ) &&
+                    missing_time >= std::max(
+                        0.0,
+                        params_for_obstacle_avoidance
+                            .oncoming_detection_hold_time );
+            }
         }
 
         if( !release_wait )
@@ -1107,6 +1159,7 @@ continue_active_avoidance(
     // shifted ego, or an oncoming other-lane object during an in-lane shift) are skipped.
     std::optional<::adore::planner::RouteCorridorConflict> stop_conflict;
     std::optional<::adore::planner::RouteCorridorConflict> ahead_conflict;
+    std::vector<int> ahead_conflict_ids;
 
     const auto prefer_more_urgent =
         [&]( const std::optional<::adore::planner::RouteCorridorConflict>& current,
@@ -1143,6 +1196,17 @@ continue_active_avoidance(
             conflict.object_class ==
             ::adore::planner::RouteCorridorObjectClass::StaticOrSlow;
 
+        // The dedicated opposite-lane monitor above is the sole authority for
+        // oncoming traffic during an opposite-lane maneuver. Reprocessing the
+        // same participant here could command a stop inside the opposite lane
+        // after the monitor deliberately chose to continue clearing it.
+        if( active_avoidance_state.maneuver.uses_opposite_lane &&
+            conflict.object_class ==
+                ::adore::planner::RouteCorridorObjectClass::Oncoming )
+        {
+            continue;
+        }
+
         if( is_static )
         {
             // A static object still keeping side_clearance to the shifted ego is
@@ -1168,6 +1232,16 @@ continue_active_avoidance(
             {
                 // Fully ahead: room to widen the shift for it.
                 ahead_conflict = conflict;
+            }
+
+            if( conflict.object_s_min > ego_front_s &&
+                conflict.participant_id >= 0 &&
+                std::find(
+                    ahead_conflict_ids.begin(),
+                    ahead_conflict_ids.end(),
+                    conflict.participant_id ) == ahead_conflict_ids.end() )
+            {
+                ahead_conflict_ids.push_back( conflict.participant_id );
             }
         }
         else
@@ -1204,15 +1278,10 @@ continue_active_avoidance(
     }
 
     // A new object ahead reveals the avoidance must extend to also clear it. Replan
-    // the WHOLE maneuver from the mission route (route_with_signal) in ONE pass and
-    // hold the committed shift geometrically -- NOT by tracking the committed object's
-    // id. The committed shift (its route s-span + magnitude, from active_avoidance_state)
-    // is rebuilt inside the planner as a synthetic "hold" obstacle, so it composes with
-    // the newly detected object in the mission frame: both keep a nonzero shift, the
-    // per-object bridge joins them into one continuous curve (identical to both objects
-    // visible from the start), and ego never dips back toward the lane between them.
-    // Because the hold is geometry, not an id lookup, it survives the real object
-    // dropping out of perception mid-shift -- detection stays purely geometric.
+    // the whole maneuver from the mission route in one pass. Frozen object hulls
+    // are carried in the mission frame and composed with every newly detected
+    // driven-corridor intrusion. Each object keeps its own smooth curve; the
+    // max-magnitude envelope and the per-object bridge join them continuously.
     //
     // Lock the replan to the current shift direction (shift_direction_sign) so it only
     // ever widens the side ego is already going, never the opposite (which would pull
@@ -1230,20 +1299,22 @@ continue_active_avoidance(
         const double shift_direction_sign =
             active_avoidance_state.lateral_shift >= 0.0 ? 1.0 : -1.0;
 
+        auto replan_baseline =
+            apply_live_speed_overlays(
+                active_avoidance_state.mission_route_baseline,
+                route_with_signal );
+
         if( auto replanned_behavior =
                 try_dynamic_replan_from_route(
                     planner,
-                    route_with_signal,
+                    replan_baseline,
                     ego_s_original,
                     vehicle_state_dynamic,
                     traffic_participants,
                     params_for_obstacle_avoidance,
                     active_avoidance_state,
-                    nullptr,
-                    shift_direction_sign,
-                    active_avoidance_state.obstacle_s_min,
-                    active_avoidance_state.obstacle_s_max,
-                    active_avoidance_state.lateral_shift );
+                    &ahead_conflict_ids,
+                    shift_direction_sign );
             replanned_behavior.has_value() )
         {
             return replanned_behavior.value();
@@ -1254,11 +1325,9 @@ continue_active_avoidance(
         return make_active_conflict_stop_behavior( ahead_conflict.value(), ego_s_modified );
     }
 
-    // fix(oa): the maneuver commits immediately (committed = true above), so there
-    // is no pre-commit return-to-mission path. A static object (v <
-    // max_static_object_speed) that drops out of perception is treated as a glitch
-    // and the shift is held; the only return to the mission line is via release_s
-    // (obstacle passed) below, or a full stop when avoidance is no longer possible.
+    // Persistent obstacle hulls keep the accepted route stable when a static
+    // detection disappears. The maneuver returns to the mission route only at
+    // release_s below, or stops when avoidance is no longer possible.
     const bool projection_valid =
         std::isfinite( ego_s_modified ) &&
         std::isfinite( ego_s_original );
@@ -1282,8 +1351,6 @@ continue_active_avoidance(
 
     if( release_by_modified || release_by_original_fallback )
     {
-        active_avoidance_state.reset();
-
         // Resume planning on the mission route after releasing the maneuver.
         dynamics::Trajectory trajectory;
         try
@@ -1300,8 +1367,23 @@ continue_active_avoidance(
                 "driving mission (fallback stop)" );
         }
 
+        if( trajectory.states.empty() )
+        {
+            return make_active_stop_behavior(
+                "driving mission (fallback stop)" );
+        }
+
+        // Commit the lifecycle transition only after a usable mission-route
+        // trajectory exists. Otherwise the next cycle must retain the active
+        // geometry on which ego is safely braking.
+        active_avoidance_state.reset();
+
         trajectory.adjust_start_time( vehicle_state_dynamic.time );
         trajectory.label = "driving mission";
+        if( use_weather_comfort_settings )
+        {
+            trajectory.label += " (" + weather_label + ")";
+        }
 
         Behavior trajectory_and_signal;
         trajectory_and_signal.trajectory =
@@ -1322,11 +1404,9 @@ continue_active_avoidance(
                 active_avoidance_state.shift_end_s,
                 active_avoidance_state.release_s,
                 planner.get_physical_vehicle_parameters(),
-                params_with_sized_avoidance_speed(
+                params_with_selected_avoidance_speed(
                     params_for_obstacle_avoidance,
-                    planner.get_physical_vehicle_parameters(),
-                    active_avoidance_state.obstacle_s_min - active_avoidance_state.shift_start_s,
-                    active_avoidance_state.lateral_shift ),
+                    active_avoidance_state.avoidance_speed ),
                 vehicle_state_dynamic.vx );
 
         if( use_weather_comfort_settings )
@@ -1451,65 +1531,6 @@ try_ego_lane_oncoming_stop_behavior(
     return std::nullopt;
 }
 
-// Reduced-speed route trajectory for adverse weather on the original route.
-Behavior
-plan_weather_behavior(
-    planner::TrajectoryPlanner& planner,
-    const map::Route& route_with_signal,
-    const dynamics::VehicleStateDynamic& vehicle_state_dynamic,
-    const dynamics::TrafficParticipantSet& traffic_participants,
-    const planner::ObstacleAvoidanceParams& params_for_obstacle_avoidance,
-    const dynamics::ComfortSettings& weather_comfort_settings,
-    const std::string& weather_label )
-{
-    const auto weather_route =
-        apply_route_max_speed_cap(
-            route_with_signal,
-            weather_comfort_settings.max_speed );
-
-    dynamics::Trajectory trajectory;
-    try
-    {
-        trajectory =
-            planner.plan_route_trajectory(
-                weather_route,
-                vehicle_state_dynamic,
-                traffic_participants );
-    }
-    catch( const std::exception& )
-    {
-        return make_stop_on_route_behavior(
-            planner,
-            route_with_signal,
-            vehicle_state_dynamic,
-            traffic_participants,
-            params_for_obstacle_avoidance,
-            "original" );
-    }
-
-    if( trajectory.states.empty() )
-    {
-        return make_stop_on_route_behavior(
-            planner,
-            route_with_signal,
-            vehicle_state_dynamic,
-            traffic_participants,
-            params_for_obstacle_avoidance,
-            "original" );
-    }
-
-    trajectory.adjust_start_time( vehicle_state_dynamic.time );
-    trajectory.label = "driving mission (" + weather_label + ")";
-
-    Behavior trajectory_and_signal;
-    trajectory_and_signal.trajectory =
-        dynamics::conversions::to_ros_msg( trajectory );
-    trajectory_and_signal.modified_route =
-        map::conversions::to_ros_msg( weather_route );
-
-    return trajectory_and_signal;
-}
-
 // No active maneuver: run corridor safety, then try to start a new obstacle
 // avoidance maneuver; fall back to a route stop, stop-hold, or normal driving.
 Behavior
@@ -1583,14 +1604,10 @@ plan_obstacle_avoidance_behavior(
         // but they must not activate a persistent avoidance state.
         if( oa_result.has_maneuver_bounds )
         {
-            // Fresh maneuver: recorded uncommitted here, but on fix(oa) the next
-            // continue_active_avoidance cycle commits it immediately (static
-            // object). The flag is kept only for consistency with the shared
-            // ActiveAvoidanceState; it drives no pre-commit behaviour on this branch.
             start_active_avoidance_state(
                 active_avoidance_state,
-                oa_result );
-            active_avoidance_state.committed = false;
+                oa_result,
+                route_with_signal );
         }
         else
         {
@@ -1692,15 +1709,10 @@ plan_obstacle_avoidance_behavior(
                 oa_result.shift_end_s,
                 oa_result.maneuver.release_s,
                 planner.get_physical_vehicle_parameters(),
-                params_with_sized_avoidance_speed(
+                params_with_selected_avoidance_speed(
                     params_for_obstacle_avoidance,
-                    planner.get_physical_vehicle_parameters(),
-                    oa_result.obstacle_s_min - oa_result.shift_start_s,
-                    oa_result.lateral_shift ),
+                    oa_result.avoidance_speed ),
                 vehicle_state_dynamic.vx );
-        active_avoidance_state.modified_route =
-            modified_route_for_planning;
-
         try
         {
             trajectory =
