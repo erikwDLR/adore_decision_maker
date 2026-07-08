@@ -82,39 +82,28 @@ obstacle_avoidance_label(
     planner::ObstacleAvoidanceMode mode,
     bool in_lane,
     double lateral_shift,
-    bool active,
     bool indicate_direction )
 {
-    const std::string prefix =
-        active
-            ? "driving mission (active obstacle avoidance"
-            : "driving mission (obstacle avoidance";
-
-    if( in_lane )
-    {
-        return active
-            ? "driving mission (active in-lane obstacle avoidance)"
-            : "driving mission (in-lane obstacle avoidance)";
-    }
-
-    if( indicate_direction )
+    // Reduced, colleague-facing label: "driving mission (avoiding obstacle[ left/right])".
+    // An in-lane nudge never signals a direction (no lane change), and the direction
+    // suffix is only added inside the signalling window (indicate_direction). The turn
+    // indicator downstream keys on the " left)" / " right)" substring.
+    if( !in_lane && indicate_direction )
     {
         if( mode == planner::ObstacleAvoidanceMode::OvertakeLeft ||
             lateral_shift > 1e-6 )
         {
-            return prefix + " left)";
+            return "driving mission (avoiding obstacle left)";
         }
 
         if( mode == planner::ObstacleAvoidanceMode::OvertakeRight ||
             lateral_shift < -1e-6 )
         {
-            return prefix + " right)";
+            return "driving mission (avoiding obstacle right)";
         }
     }
 
-    return active
-        ? "driving mission (active obstacle avoidance)"
-        : "driving mission (obstacle avoidance)";
+    return "driving mission (avoiding obstacle)";
 }
 
 // Single-sourced in planning/obstacle_avoidance.hpp; brought into this namespace
@@ -375,7 +364,7 @@ make_route_failsafe_behavior(
 
     if( !trajectory.states.empty() )
     {
-        trajectory.label = "obstacle avoidance: route failsafe";
+        trajectory.label = "driving mission (fallback stop)";
         trajectory.adjust_start_time( ego.time );
     }
 
@@ -393,7 +382,7 @@ make_stop_on_route_behavior(
     const dynamics::VehicleStateDynamic& ego,
     const dynamics::TrafficParticipantSet& traffic_participants,
     const planner::ObstacleAvoidanceParams& params,
-    const std::string& active_route_name,
+    [[maybe_unused]] const std::string& active_route_name,
     map::Route* accepted_stop_route = nullptr )
 {
     auto stop_route =
@@ -452,9 +441,7 @@ make_stop_on_route_behavior(
         if( !trajectory.states.empty() )
         {
             trajectory.adjust_start_time( ego.time );
-            trajectory.label =
-                "obstacle avoidance: maximum route-based braking on active " +
-                active_route_name + "_route";
+            trajectory.label = "driving mission (fallback stop)";
 
             Behavior behavior;
             behavior.trajectory = dynamics::conversions::to_ros_msg( trajectory );
@@ -475,7 +462,7 @@ make_stop_on_route_behavior(
     }
 
     trajectory.adjust_start_time( ego.time );
-    trajectory.label = "obstacle avoidance: stop on " + active_route_name + "_route";
+    trajectory.label = "driving mission (stopping for obstacle)";
 
     Behavior behavior;
     behavior.trajectory = dynamics::conversions::to_ros_msg( trajectory );
@@ -792,7 +779,6 @@ try_dynamic_replan_from_route(
             replan_result.mode,
             replan_result.in_lane,
             replan_result.lateral_shift,
-            true,
             should_indicate_avoidance_direction(
                 replan_ego_s,
                 replan_result.shift_start_s,
@@ -860,7 +846,8 @@ continue_active_avoidance(
         };
 
     auto make_active_conflict_stop_behavior =
-        [&]( const ::adore::planner::RouteCorridorConflict& conflict ) -> Behavior
+        [&]( const ::adore::planner::RouteCorridorConflict& conflict,
+             double ego_s_on_active_route ) -> Behavior
         {
             // Stop point before the conflict: brake gently if it is far enough,
             // otherwise apply_brake_envelope falls back to maximum braking.
@@ -884,6 +871,42 @@ continue_active_avoidance(
                 stop_s_before_obstacle(
                     reference_s, params_for_obstacle_avoidance, vehicle_params );
 
+            // Waiting for oncoming traffic before pulling out -> "waiting for oncoming";
+            // any other active-route brake (obstacle blocks, no room) -> "stopping for
+            // obstacle". Keep the turn indicator on through the oncoming wait (a human
+            // holds the blinker while waiting, not only while moving over): append the
+            // " left)" / " right)" suffix the indicator downstream keys on, over the same
+            // window the shift behavior uses. An in-lane maneuver or a non-oncoming brake
+            // stays direction-less, so it never signals a pull-out that is not happening.
+            std::string brake_label;
+            if( oncoming_conflict )
+            {
+                brake_label = "driving mission (waiting for oncoming";
+                const bool indicate =
+                    !active_avoidance_state.in_lane &&
+                    should_indicate_avoidance_direction(
+                        ego_s_on_active_route,
+                        active_avoidance_state.shift_start_s,
+                        active_avoidance_state.obstacle_s_min,
+                        params_for_obstacle_avoidance );
+                if( indicate && active_avoidance_state.lateral_shift > 1e-6 )
+                {
+                    brake_label += " left)";
+                }
+                else if( indicate && active_avoidance_state.lateral_shift < -1e-6 )
+                {
+                    brake_label += " right)";
+                }
+                else
+                {
+                    brake_label += ")";
+                }
+            }
+            else
+            {
+                brake_label = "driving mission (stopping for obstacle)";
+            }
+
             return make_route_brake_in_place_behavior(
                 planner,
                 active_route,
@@ -892,7 +915,7 @@ continue_active_avoidance(
                 conflict_stop_s,
                 traffic_participants,
                 params_for_obstacle_avoidance,
-                "obstacle avoidance: route brake on active modified_route" );
+                brake_label );
         };
 
     // Update the ego progress on the modified route before any active-stop or
@@ -922,7 +945,7 @@ continue_active_avoidance(
     if( !ego_s_modified_opt.has_value() )
     {
         return make_active_stop_behavior(
-            "driving mission (active OA route stop: invalid modified-route projection)" );
+            "driving mission (fallback stop)" );
     }
 
     const double ego_s_modified = ego_s_modified_opt.value();
@@ -1016,7 +1039,7 @@ continue_active_avoidance(
             held_conflict.requires_stop = true;
             held_conflict.reason =
                 "oncoming-wait latch: holding until oncoming clears the conflict interval";
-            return make_active_conflict_stop_behavior( held_conflict );
+            return make_active_conflict_stop_behavior( held_conflict, ego_s_modified );
         }
 
         active_avoidance_state.clear_oncoming_wait();
@@ -1050,7 +1073,7 @@ continue_active_avoidance(
             active_avoidance_state.oncoming_wait_last_seen_time =
                 vehicle_state_dynamic.time;
         }
-        return make_active_conflict_stop_behavior( monitor_conflict.value() );
+        return make_active_conflict_stop_behavior( monitor_conflict.value(), ego_s_modified );
     }
 
     // Stage 1: a single id-independent corridor pass on the DRIVEN (modified) route,
@@ -1177,7 +1200,7 @@ continue_active_avoidance(
             static_cast<int>( stop_conflict->object_class ),
             stop_conflict->object_s_min,
             stop_conflict->object_s_max );
-        return make_active_conflict_stop_behavior( stop_conflict.value() );
+        return make_active_conflict_stop_behavior( stop_conflict.value(), ego_s_modified );
     }
 
     // A new object ahead reveals the avoidance must extend to also clear it. Replan
@@ -1228,7 +1251,7 @@ continue_active_avoidance(
 
         // No drivable extension validated -> brake on the driven route rather than
         // snapping toward the mission line.
-        return make_active_conflict_stop_behavior( ahead_conflict.value() );
+        return make_active_conflict_stop_behavior( ahead_conflict.value(), ego_s_modified );
     }
 
     // fix(oa): the maneuver commits immediately (committed = true above), so there
@@ -1274,7 +1297,7 @@ continue_active_avoidance(
         catch( const std::exception& )
         {
             return make_active_stop_behavior(
-                "driving mission (planner exception after OA release)" );
+                "driving mission (fallback stop)" );
         }
 
         trajectory.adjust_start_time( vehicle_state_dynamic.time );
@@ -1326,7 +1349,7 @@ continue_active_avoidance(
         catch( const std::exception& )
         {
             return make_active_stop_behavior(
-                "driving mission (active OA planner exception)" );
+                "driving mission (fallback stop)" );
         }
 
         trajectory.label =
@@ -1334,7 +1357,6 @@ continue_active_avoidance(
                 active_avoidance_state.maneuver.mode,
                 active_avoidance_state.in_lane,
                 active_avoidance_state.lateral_shift,
-                true,
                 should_indicate_avoidance_direction(
                     ego_s_modified,
                     active_avoidance_state.shift_start_s,
@@ -1349,7 +1371,7 @@ continue_active_avoidance(
         {
 
             return make_active_stop_behavior(
-                "driving mission (active OA controlled stop: planning failed)" );
+                "driving mission (fallback stop)" );
         }
 
         if( auto monitor_conflict =
@@ -1364,7 +1386,7 @@ continue_active_avoidance(
                     &trajectory );
             monitor_conflict.has_value() )
         {
-            return make_active_conflict_stop_behavior( monitor_conflict.value() );
+            return make_active_conflict_stop_behavior( monitor_conflict.value(), ego_s_modified );
         }
 
         trajectory.adjust_start_time( vehicle_state_dynamic.time );
@@ -1643,7 +1665,7 @@ plan_obstacle_avoidance_behavior(
                 far_stop_s,
                 traffic_participants,
                 params_for_obstacle_avoidance,
-                "obstacle avoidance: stop before obstacle on original_route" );
+                "driving mission (stopping for obstacle)" );
         }
 
         dynamics::Trajectory trajectory;
@@ -1716,7 +1738,6 @@ plan_obstacle_avoidance_behavior(
                 oa_result.mode,
                 oa_result.in_lane,
                 oa_result.lateral_shift,
-                false,
                 should_indicate_avoidance_direction(
                     ego_s_modified,
                     oa_result.shift_start_s,
