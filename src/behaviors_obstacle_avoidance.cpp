@@ -187,6 +187,7 @@ map::Route
 apply_active_avoidance_speed_profile(
     const map::Route& active_route,
     double ego_s,
+    const std::vector<planner::AvoidanceShiftContribution>& contributions,
     double shift_start_s,
     double shift_end_s,
     double release_s,
@@ -194,6 +195,35 @@ apply_active_avoidance_speed_profile(
     const planner::ObstacleAvoidanceParams& params,
     double ego_v = std::numeric_limits<double>::infinity() )
 {
+    std::vector<planner::AvoidanceSpeedSegment> speed_segments;
+    speed_segments.reserve( contributions.size() );
+    for( const auto& contribution : contributions )
+    {
+        if( !std::isfinite( contribution.ramp_start_s ) ||
+            !std::isfinite( contribution.ramp_end_s ) )
+        {
+            continue;
+        }
+
+        speed_segments.push_back(
+            planner::AvoidanceSpeedSegment{
+                contribution.ramp_start_s,
+                contribution.ramp_end_s } );
+    }
+
+    if( !speed_segments.empty() )
+    {
+        return planner::RouteSpeedPolicy::
+            apply_segmented_avoidance_speed_profile(
+                active_route,
+                ego_s,
+                speed_segments,
+                vehicle_params,
+                params );
+    }
+
+    // Compatibility fallback for a legacy/incomplete active state without
+    // per-object ramp bounds.
     double maneuver_end_s =
         std::isfinite( release_s )
             ? release_s
@@ -730,6 +760,7 @@ try_dynamic_replan_from_route(
         apply_active_avoidance_speed_profile(
             replan_result.modified_route,
             replan_ego_s,
+            replan_result.shift_contributions,
             replan_result.shift_start_s,
             replan_result.shift_end_s,
             replan_result.maneuver.release_s,
@@ -1400,6 +1431,7 @@ continue_active_avoidance(
             apply_active_avoidance_speed_profile(
                 active_route,
                 ego_s_modified,
+                active_avoidance_state.committed_contributions,
                 active_avoidance_state.shift_start_s,
                 active_avoidance_state.shift_end_s,
                 active_avoidance_state.release_s,
@@ -1747,6 +1779,7 @@ plan_obstacle_avoidance_behavior(
             apply_active_avoidance_speed_profile(
                 oa_result.modified_route,
                 ego_s_modified,
+                oa_result.shift_contributions,
                 oa_result.shift_start_s,
                 oa_result.shift_end_s,
                 oa_result.maneuver.release_s,
