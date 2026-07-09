@@ -1646,15 +1646,57 @@ plan_obstacle_avoidance_behavior(
 
             if( obstacle_still_far )
             {
-                auto far_trajectory = oa_result.trajectory;
-                far_trajectory.adjust_start_time( vehicle_state_dynamic.time );
+                // The stop result already contains a brake-envelope route. Its
+                // coast cap intentionally prevents acceleration toward a nearby
+                // stop, but applying it while the stop point is still far away
+                // limits an ego starting from rest to
+                // max_speed_during_avoidance for the whole approach. Keep normal
+                // mission driving until the comfort braking envelope plus margin
+                // is reached; this function is called every cycle, so the stop
+                // profile is activated as soon as it is actually needed.
+                dynamics::Trajectory far_trajectory;
+                try
+                {
+                    far_trajectory =
+                        planner.plan_route_trajectory(
+                            route_with_signal,
+                            vehicle_state_dynamic,
+                            traffic_participants );
+                }
+                catch( const std::exception& )
+                {
+                }
 
-                Behavior far_behavior;
-                far_behavior.trajectory =
-                    dynamics::conversions::to_ros_msg( far_trajectory );
-                far_behavior.modified_route =
-                    map::conversions::to_ros_msg( oa_result.modified_route );
-                return far_behavior;
+                if( !far_trajectory.states.empty() )
+                {
+                    far_trajectory.adjust_start_time(
+                        vehicle_state_dynamic.time );
+                    far_trajectory.label =
+                        "driving mission (obstacle ahead)";
+
+                    Behavior far_behavior;
+                    far_behavior.trajectory =
+                        dynamics::conversions::to_ros_msg( far_trajectory );
+                    far_behavior.modified_route =
+                        map::conversions::to_ros_msg( route_with_signal );
+                    return far_behavior;
+                }
+
+                // If ordinary mission planning transiently fails, retain the
+                // already validated stop trajectory rather than emitting an
+                // empty or routeless behavior.
+                auto fallback_trajectory = oa_result.trajectory;
+                fallback_trajectory.adjust_start_time(
+                    vehicle_state_dynamic.time );
+
+                Behavior fallback_behavior;
+                fallback_behavior.trajectory =
+                    dynamics::conversions::to_ros_msg(
+                        fallback_trajectory );
+                fallback_behavior.modified_route =
+                    map::conversions::to_ros_msg(
+                        oa_result.modified_route );
+                return fallback_behavior;
             }
 
             if( !std::isfinite( far_stop_s ) )
