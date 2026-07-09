@@ -290,6 +290,21 @@ void DecisionMaker::setup_subscribers()
                                         suggested_remote_operator_trajectory = dynamics::conversions::to_cpp_type(msg); 
                                         suggested_remote_operator_trajectory.value().adjust_start_time( latest_vehicle_state_dynamic.value().time );
                                        });
+                          
+  subscriber_user_input = create_subscription<std_msgs::msg::String>( "/user_input", 1, 
+    [this](const std_msgs::msg::String& msg) { if ( msg.data == "turn off participants" )
+                                                {
+                                                  turn_off_participants_until = now().seconds() + turn_off_participants_duration;
+                                                } 
+                                                if ( msg.data == "overtake now" )
+                                                {
+                                                  obstacle_avoidance_params.opposite_lane_enabled = true;
+                                                }
+                                                if ( msg.data == "overtake no more" )
+                                                {
+                                                  obstacle_avoidance_params.opposite_lane_enabled = false;
+                                                }
+});
 
   subscriber_unstructured_drivable_area = create_subscription<adore_ros2_msgs::msg::CautionZone>( "unstructured_drivable_area", 1,
                                     [this](const adore_ros2_msgs::msg::CautionZone& msg) {  unstructured_drivable_area = math::conversions::to_cpp_type(msg.polygon); });
@@ -335,6 +350,20 @@ behavior::Behavior DecisionMaker::choose_and_plan_driving_behavior()
   bool can_drive_managed = conditions::can_drive_managed(latest_vehicle_state_dynamic, time_now, latest_managed_zone, latest_managed_trajectory);
   bool odd_conditions_satisfied = conditions::odd_conditions_satisfied(latest_odd, time_now);
   bool must_drive_unstructured = conditions::must_drive_unstructured( latest_vehicle_state_dynamic, unstructured_drivable_area );
+  if (turn_off_participants_until.has_value())
+  {
+    if ( now().seconds() < turn_off_participants_until.value())
+    {
+      dynamics::TrafficParticipantSet temp;
+      traffic_participants = temp;
+      // return;
+    }
+    else
+    {
+      turn_off_participants_until = std::nullopt;
+    }
+
+  }
 
   if (
     has_localization &&

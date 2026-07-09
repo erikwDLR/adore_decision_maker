@@ -7,7 +7,7 @@
     obstacle_avoidance.enabled: true
 
     # Object detection
-    obstacle_avoidance.max_object_ahead: 100.0
+    obstacle_avoidance.max_object_ahead: 300.0
     # fix(oa) branch: only genuinely static objects trigger a lateral avoidance.
     # The rosbags show parked cars report exactly 0 velocity and pedestrians
     # ~1-2 m/s, so 0.1 (reserve for perception not reporting exactly 0) cleanly
@@ -31,8 +31,8 @@
 
     # Mode switches
     obstacle_avoidance.in_lane_shift_enabled: true
-    obstacle_avoidance.adjacent_lane_enabled: true
-    obstacle_avoidance.opposite_lane_enabled: true
+    obstacle_avoidance.adjacent_lane_enabled: false
+    obstacle_avoidance.opposite_lane_enabled: false
 
     # Drivable area / route behavior
     obstacle_avoidance.enforce_drivable_area: true

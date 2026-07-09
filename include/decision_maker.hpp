@@ -27,6 +27,7 @@
 #include "adore_ros2_msgs/msg/weather.hpp"
 #include <adore_math/polygon.h>
 #include "std_msgs/msg/bool.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "planning/obstacle_avoidance.hpp"
 #include "adore_map_conversions.hpp"
 #include "planning/unstructured_planner.hpp"
@@ -65,6 +66,7 @@ private:
   rclcpp::Subscription<adore_ros2_msgs::msg::CautionZone>::SharedPtr subscriber_caution_zones;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr subscriber_remote_operator_drive_approval;
   rclcpp::Subscription<adore_ros2_msgs::msg::Trajectory>::SharedPtr subscriber_suggested_remote_operator_trajectory;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr subscriber_user_input;
   // rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr       subscriber_automation_toggle;
 
   int v2x_id = 0;
@@ -103,6 +105,8 @@ private:
   // DecisionParams               params;
   rclcpp::TimerBase::SharedPtr timer;
 
+  double turn_off_participants_duration = 20.0;
+  std::optional<double> turn_off_participants_until = std::nullopt;
 
   void load_parameters();
   void setup_subscribers();
