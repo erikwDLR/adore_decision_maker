@@ -86,6 +86,7 @@ load_obstacle_avoidance_params( rclcpp::Node& node )
 
   // Oncoming traffic gap-acceptance parameters
   params.oncoming_time_margin = node.declare_parameter<double>( "obstacle_avoidance.oncoming_time_margin", params.oncoming_time_margin );
+  params.stop_for_oncoming_after_commitment = node.declare_parameter<bool>( "obstacle_avoidance.stop_for_oncoming_after_commitment", params.stop_for_oncoming_after_commitment );
   params.min_ego_speed_for_gap_check = node.declare_parameter<double>( "obstacle_avoidance.min_ego_speed_for_gap_check", params.min_ego_speed_for_gap_check );
   params.min_oncoming_speed_for_gap_check = node.declare_parameter<double>( "obstacle_avoidance.min_oncoming_speed_for_gap_check", params.min_oncoming_speed_for_gap_check );
   params.min_oncoming_route_speed = node.declare_parameter<double>( "obstacle_avoidance.min_oncoming_route_speed", params.min_oncoming_route_speed );

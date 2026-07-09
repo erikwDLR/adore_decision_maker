@@ -7,7 +7,7 @@
     obstacle_avoidance.enabled: true
 
     # Object detection
-    obstacle_avoidance.max_object_ahead: 80.0
+    obstacle_avoidance.max_object_ahead: 100.0
     # fix(oa) branch: only genuinely static objects trigger a lateral avoidance.
     # The rosbags show parked cars report exactly 0 velocity and pedestrians
     # ~1-2 m/s, so 0.1 (reserve for perception not reporting exactly 0) cleanly
@@ -84,6 +84,11 @@
 
     # Minimum time margin before an oncoming vehicle arrives at conflict area
     obstacle_avoidance.oncoming_time_margin: 1.0
+
+    # Brake on the currently driven modified route even when a conflicting
+    # oncoming vehicle is first detected after ego has committed to the
+    # opposite-lane maneuver.
+    obstacle_avoidance.stop_for_oncoming_after_commitment: true
 
     # Minimum speed for ego vehicle when computing clear time
     obstacle_avoidance.min_ego_speed_for_gap_check: 1.0

@@ -648,30 +648,13 @@ check_opposite_lane_monitor(
             params,
             planned_trajectory );
 
-    if( monitor_result.should_abort_before_commitment )
+    if( ::adore::planner::should_stop_for_oncoming_monitor_result(
+            monitor_result,
+            params ) )
     {
         return make_oncoming_monitor_conflict(
             monitor_result,
             conflict_hint_s );
-    }
-
-    if( !monitor_result.safe_to_continue )
-    {
-        // Past commitment, stopping inside the opposite lane is usually more
-        // dangerous than finishing the maneuver. Stop only if the conflicting
-        // participant is already inside the conflict interval; for a predicted
-        // future arrival, keep following the active route to clear the opposite
-        // lane as quickly as possible.
-        const bool conflict_already_in_interval =
-            monitor_result.oncoming.oncoming_arrival_time <= 1e-6;
-
-        if( conflict_already_in_interval )
-        {
-            return make_oncoming_monitor_conflict(
-                monitor_result,
-                conflict_hint_s );
-        }
-
     }
 
     return std::nullopt;
