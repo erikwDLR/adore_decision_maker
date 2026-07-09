@@ -7,7 +7,7 @@
     obstacle_avoidance.enabled: true
 
     # Object detection
-    obstacle_avoidance.max_object_ahead: 200.0
+    obstacle_avoidance.max_object_ahead: 80.0
     # fix(oa) branch: only genuinely static objects trigger a lateral avoidance.
     # The rosbags show parked cars report exactly 0 velocity and pedestrians
     # ~1-2 m/s, so 0.1 (reserve for perception not reporting exactly 0) cleanly
@@ -39,7 +39,7 @@
     # Upper speed cap during avoidance; the maneuver speed is sized down from this
     # so the lateral shift stays within avoidance_lateral_accel over the entry ramp
     # (v = ramp*sqrt(a/(6*D))). Raise to let small shifts drive faster.
-    obstacle_avoidance.max_speed_during_avoidance: 2.78
+    obstacle_avoidance.max_speed_during_avoidance: 4.167
     # Comfort lateral acceleration coupling maneuver speed and ramp length.
     obstacle_avoidance.avoidance_lateral_accel: 2.0
     # Creep floor for the sized avoidance speed (m/s).
