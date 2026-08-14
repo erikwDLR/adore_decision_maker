@@ -27,6 +27,7 @@
 #include "adore_ros2_msgs/msg/weather.hpp"
 #include <adore_math/polygon.h>
 #include "std_msgs/msg/bool.hpp"
+#include "std_msgs/msg/float64.hpp"
 #include "planning/obstacle_avoidance.hpp"
 #include "adore_map_conversions.hpp"
 #include "planning/unstructured_planner.hpp"
@@ -75,6 +76,7 @@ private:
   rclcpp::Publisher<adore_ros2_msgs::msg::Trajectory>::SharedPtr publisher_alternative_trajectory_decision;
     rclcpp::Publisher<adore_ros2_msgs::msg::Route>::SharedPtr publisher_modified_route;
   rclcpp::Publisher<adore_ros2_msgs::msg::TrafficParticipant>::SharedPtr publisher_v2x_traffic_participant;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher_planning_cycle_runtime_ms;
 
   // Planning
   planner::TrajectoryPlanner planner; // @TODO Think most of these can be removed

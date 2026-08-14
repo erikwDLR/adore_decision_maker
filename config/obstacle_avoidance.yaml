@@ -4,157 +4,111 @@
     # Public baseline parameters
     # --------------------------------------------------------------------------
 
+    # Master switch for obstacle avoidance, including its defensive stop logic.
     obstacle_avoidance.enabled: true
 
-    # Object detection
-    obstacle_avoidance.max_object_ahead: 100.0
-    # fix(oa) branch: only genuinely static objects trigger a lateral avoidance.
-    # The rosbags show parked cars report exactly 0 velocity and pedestrians
-    # ~1-2 m/s, so 0.1 (reserve for perception not reporting exactly 0) cleanly
-    # keeps pedestrians out of the shift -- they are braked for, not swerved around.
+    # Maximum measured object speed [m/s] still classified as static.
     obstacle_avoidance.max_static_object_speed: 0.1
 
-    # Speed hysteresis before an already-avoided obstacle stops being ignored
-    obstacle_avoidance.ignored_obstacle_release_speed: 1.5
-
-    # Ego-route relevance corridor
+    # Hard minimum edge-to-edge clearance [m] for intrusion detection and
+    # trajectory validation.
     obstacle_avoidance.ego_corridor_safety_margin: 0.5
 
-    # Real lateral object clearance
+    # Desired edge-to-edge lateral clearance [m] used to size the route shift.
     obstacle_avoidance.side_clearance: 1.0
 
-    # Longitudinal maneuver geometry. front_clearance is the MAX entry ramp; the
-    # effective ramp is sized down to the available distance to a late obstacle.
+    # Allowed shortfall [m] from side_clearance before another optional
+    # best-effort replan is requested. Does not change either safety distance.
+    obstacle_avoidance.side_clearance_replan_tolerance: 0.03
+
+    # Maximum shift-in ramp length [m] before ego is fully alongside an object.
     obstacle_avoidance.front_clearance: 7.0
+
+    # Shift-out ramp length [m] after the ego footprint has cleared an object.
     obstacle_avoidance.rear_clearance: 7.0
+
+    # Desired longitudinal gap [m] from ego front to a blocking object when stopped.
     obstacle_avoidance.stop_before_obstacle: 8.0
 
-    # Mode switches
+    # Allow an avoidance shift that remains inside the current driving lane.
     obstacle_avoidance.in_lane_shift_enabled: true
+
+    # Allow an avoidance shift into connected same-direction driving lanes.
     obstacle_avoidance.adjacent_lane_enabled: true
+
+    # Allow an avoidance shift into an opposite-direction driving lane.
     obstacle_avoidance.opposite_lane_enabled: true
 
-    # Drivable area / route behavior
-    obstacle_avoidance.enforce_drivable_area: true
-    # Upper speed cap during avoidance; the maneuver speed is sized down from this
-    # so the lateral shift stays within avoidance_lateral_accel over the entry ramp
-    # (v = ramp*sqrt(a/(6*D))). Raise to let small shifts drive faster.
+    # Upper avoidance-speed limit [m/s]; 0 disables this additional speed cap.
     obstacle_avoidance.max_speed_during_avoidance: 4.167
-    # Comfort lateral acceleration coupling maneuver speed and ramp length.
-    obstacle_avoidance.avoidance_lateral_accel: 2.0
-    # Creep floor for the sized avoidance speed (m/s).
-    obstacle_avoidance.min_avoidance_speed: 0.833 
 
-    # Distance ahead of the lateral-shift start at which the turn indicator
-    # switches on (the blinker stays off while the maneuver is only decided).
+    # Lateral comfort acceleration [m/s^2] used to size speed from shift and ramp.
+    obstacle_avoidance.avoidance_lateral_accel: 2.0
+
+    # Distance [m] before shift start at which the turn indicator is requested.
     obstacle_avoidance.blinker_lead_distance: 25.0
 
-    # Candidate generation
-    obstacle_avoidance.validate_shifted_trajectory: true
-
-    # Active route monitor
-    obstacle_avoidance.modified_route_safety_check_enabled: true
-    obstacle_avoidance.modified_route_max_check_distance: 30.0
-    obstacle_avoidance.modified_route_time_horizon: 12.0
+    # Shared future-prediction horizon [s] for dynamic and oncoming conflicts.
+    obstacle_avoidance.prediction_time_horizon: 15.0
 
     # --------------------------------------------------------------------------
     # Internal/advanced parameters
     # --------------------------------------------------------------------------
 
-    # Plausibility filter for bad route projections / unrelated objects
-    obstacle_avoidance.max_object_lateral_distance: 8.0
-
-    obstacle_avoidance.min_object_ahead: 0.5
+    # Minimum heading difference [rad] used as evidence of opposite orientation.
     obstacle_avoidance.min_oncoming_heading_diff: 2.35
 
-    # If left and right are equally good, prefer left (right-hand traffic overtaking)
+    # Prefer a left shift when mode and required shift magnitude are otherwise tied.
     obstacle_avoidance.prefer_left_shift: true
 
-    # Longitudinal tolerance for neighbouring lane availability
+    # Longitudinal map tolerance [m] when checking whether a lane covers route s.
     obstacle_avoidance.lane_s_overlap_slack: 0.50
 
-    # Lateral tolerance for joining adjacent lane-border intervals
+    # Maximum lateral map gap [m] still merged into one connected drivable area.
     obstacle_avoidance.lane_boundary_join_slack: 0.25
-
-    obstacle_avoidance.max_projection_distance_from_route: 5.0
 
     # --------------------------------------------------------------------------
     # Oncoming traffic gap-acceptance parameters
     # --------------------------------------------------------------------------
 
-    # Minimum time margin before an oncoming vehicle arrives at conflict area
+    # Required time reserve [s] after ego clears before oncoming traffic arrives.
     obstacle_avoidance.oncoming_time_margin: 1.0
 
-    # Brake on the currently driven modified route even when a conflicting
-    # oncoming vehicle is first detected after ego has committed to the
-    # opposite-lane maneuver.
-    obstacle_avoidance.stop_for_oncoming_after_commitment: true
-
-    # Minimum speed for ego vehicle when computing clear time
-    obstacle_avoidance.min_ego_speed_for_gap_check: 1.0
-
-    # Minimum speed used when computing oncoming arrival time
-    obstacle_avoidance.min_oncoming_speed_for_gap_check: 1.0
-
-    # Minimum route-aligned speed for oncoming participant
+    # Minimum opposite route-aligned speed [m/s] for moving-oncoming classification.
     obstacle_avoidance.min_oncoming_route_speed: 1.0
 
-    # Participant retention distance for the prediction horizon
-    obstacle_avoidance.max_expected_participant_speed: 20.0
-
-    # Time horizon for predicting participant trajectories
-    obstacle_avoidance.prediction_time_horizon: 15.0
-
-    # Safety distances during oncoming conflict
-    obstacle_avoidance.oncoming_safety_distance_front: 2.0
-    obstacle_avoidance.oncoming_safety_distance_rear: 2.0
-
-    # Bridge short tracker dropouts while waiting for oncoming traffic
-    obstacle_avoidance.oncoming_detection_hold_time: 0.75
+    # Longitudinal reserve [m] around ego's opposite-lane occupancy interval.
+    obstacle_avoidance.oncoming_spatial_margin: 2.0
 
     # --------------------------------------------------------------------------
     # Ego-lane oncoming stop behavior
     # --------------------------------------------------------------------------
 
-    # Enable defensive stop for oncoming participants in ego lane
-    obstacle_avoidance.ego_lane_oncoming_stop_enabled: false
-
-    # Maximum longitudinal distance ahead of ego for oncoming participant
-    obstacle_avoidance.ego_lane_oncoming_max_distance: 80.0
-
-    # Maximum time-to-conflict for triggering defensive stop
-    obstacle_avoidance.ego_lane_oncoming_time_horizon: 15.0
-
-    # Required route-aligned speed against ego route direction
-    obstacle_avoidance.ego_lane_oncoming_min_route_speed: 1.0
-
-    # Additional lateral tolerance around current ego lane
+    # Additional lateral tolerance [m] when deciding ego-lane overlap.
     obstacle_avoidance.ego_lane_oncoming_lateral_margin: 0.20
 
-    # Desired distance between ego front and nearest footprint point of oncoming participant
-    obstacle_avoidance.ego_lane_oncoming_stop_distance: 15.0
+    # Desired stopping gap [m] from ego front to an oncoming ego-lane participant.
+    obstacle_avoidance.ego_lane_oncoming_stop_distance: 8.0
 
     # --------------------------------------------------------------------------
     # Active modified-route safety monitor parameters
     # --------------------------------------------------------------------------
 
-    obstacle_avoidance.modified_route_ttc_margin: 2.0
-    obstacle_avoidance.modified_route_stop_ttc_threshold: 5.0
-    obstacle_avoidance.modified_route_braking_safety_margin: 5.0
-    obstacle_avoidance.min_valid_stop_margin: 1.0
+    # Extra distance [m] added before the calculated active-route brake start.
+    obstacle_avoidance.modified_route_braking_safety_margin: 2.0
 
     # --------------------------------------------------------------------------
-    # Trajectory, geometry, and scoring parameters
+    # Trajectory and geometry parameters
     # --------------------------------------------------------------------------
 
-    obstacle_avoidance.min_vehicle_dimension: 0.1
+    # Minimum local route-s search window [m] used for route projections.
     obstacle_avoidance.route_window_min: 20.0
-    obstacle_avoidance.min_motion_speed: 0.05
-    # Nominal positive deceleration used for planned OA speed/stop profiles.
-    # Keep below abs(vehicle acceleration_min) to leave reserve for max braking.
+
+    # Extra unexplained forward projection progress [m] tolerated beyond odometry.
+    obstacle_avoidance.projection_progress_tolerance: 2.0
+
+    # Speed threshold [m/s] below which a trajectory state counts as stopped.
+    obstacle_avoidance.stopped_ego_speed: 0.20
+
+    # Nominal positive deceleration [m/s^2] for planned OA braking profiles.
     obstacle_avoidance.planned_braking_deceleration: 1.0
-    # Lower bound for braking deceleration in stop-distance calculations.
-    obstacle_avoidance.min_braking_deceleration: 0.5
-    obstacle_avoidance.stop_adjustment_offset: 1.0
-    obstacle_avoidance.lateral_shift_penalty_score: 20.0
-    obstacle_avoidance.opposite_lane_penalty_score: 40.0

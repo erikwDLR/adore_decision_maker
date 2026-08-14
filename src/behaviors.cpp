@@ -145,7 +145,6 @@ namespace behavior
                 traffic_participants,
                 params_for_obstacle_avoidance,
                 use_weather_comfort_settings,
-                weather_comfort_settings,
                 weather_label,
                 active_avoidance_state );
         }

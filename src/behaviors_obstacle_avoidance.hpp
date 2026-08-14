@@ -41,7 +41,6 @@ continue_active_avoidance(
     const dynamics::TrafficParticipantSet& traffic_participants,
     const planner::ObstacleAvoidanceParams& params_for_obstacle_avoidance,
     bool use_weather_comfort_settings,
-    const dynamics::ComfortSettings& weather_comfort_settings,
     const std::string& weather_label,
     planner::ActiveAvoidanceState& active_avoidance_state );
 
